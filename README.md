@@ -135,29 +135,39 @@ gemini_debug(
 
 ## Quick Start
 
-**One command. All platforms.**
+**One command. Pick your OS.**
 
+### macOS / Linux
 ```bash
 curl -sSL https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.sh | bash
 ```
 
-**What it does:**
-1. Detects your OS (Linux, macOS, Windows/Git Bash)
-2. Offers optional iFlow setup for AI debugging features
-3. Installs TermPipe MCP via pipx
-4. Auto-detects and configures all installed MCP clients
-5. Sets up auto-start (systemd on Linux, launchd on macOS)
+### Windows
+```powershell
+iwr -useb https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.ps1 | iex
+```
+
+---
+
+**What happens:**
+1. Detects your OS
+2. Offers optional iFlow AI debugging setup (FREE SOTA models)
+3. Installs TermPipe via pipx
+4. Auto-detects ALL installed MCP clients (Claude Desktop, Claude Code, iFlow, Gemini)
+5. Configures each client automatically
+6. Sets up auto-start (systemd/launchd - Linux/macOS only)
 
 **Supported Platforms:**
-- ✅ **Linux** - Ubuntu 20.04+, Debian 10+, Fedora, Arch
-- ✅ **macOS** - 10.15+ (Catalina and newer)  
-- ✅ **Windows** - Via Git Bash or WSL
+- ✅ Linux (Ubuntu 20.04+, Debian 10+, Fedora, Arch - any distro)
+- ✅ macOS 10.15+ (Catalina and newer)  
+- ✅ Windows 10/11 (PowerShell)
 
 **Supported Clients (auto-configured):**
 - Claude Desktop
 - Claude Code  
 - iFlow CLI
 - Gemini CLI
+
 
 ## Installation
 
