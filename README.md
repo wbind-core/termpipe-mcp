@@ -1,21 +1,96 @@
 # TermPipe MCP
 
-> **Terminal automation that just works.** Production-ready MCP server for Claude Desktop, iFlow CLI, and Gemini CLI.
+> **Intelligent system automation for AI assistants.** Production-ready MCP server providing terminal access, surgical file operations, process management, and AI-powered debugging.
 
 ## What Is This?
 
-TermPipe MCP gives AI assistants **direct, intelligent access to your terminal**. Execute commands, manage files, run REPLs, launch apps, and get AI-powered debugging assistance—all through a clean, reliable MCP interface.
+TermPipe MCP gives AI assistants **powerful, token-efficient system access**. Not just command execution—**surgical file editing**, interactive REPL management, smart search, app launching, and AI debugging. All through a clean, reliable MCP interface.
 
 **The killer feature:** Automated installation scripts that **educate your AI assistants** about available tools. iFlow and Gemini learn about TermPipe capabilities automatically—no manual explanation needed in every session.
 
 ## Why TermPipe MCP?
 
-- ✅ **Just Works** - One command installation with auto-configuration
-- 🧠 **AI Education** - Assistants learn available tools automatically  
+- 💰 **Token-Efficient** - Surgical editing tools that modify specific lines instead of rewriting entire files
+- 🧠 **AI Education** - Assistants learn available tools automatically via memory files
+- 🔧 **Comprehensive** - Terminal, files, processes, search, debugging—all in one package
 - 🚀 **Auto-Start** - Optional systemd service for boot-time startup
-- 🔧 **Battle-Tested** - 12 tool modules covering common automation needs
-- 🎯 **Zero Config Conflicts** - Runs on port 8421, isolated from other tools
-- 📝 **Comprehensive** - File ops, process management, search, debugging
+- 🎯 **Battle-Tested** - 12 tool modules covering real automation needs
+- ✅ **Just Works** - One command installation with auto-configuration
+
+## Features
+
+### 💰 Surgical File Operations (Save Tokens, Save Money)
+
+Most MCP servers force AI to read entire files, modify them, and write them back. **TermPipe uses line-level precision:**
+
+```python
+# Change one line - no need to read/write entire file
+replace_at_line("config.py", 42, "DEBUG = False", "DEBUG = True")
+
+# Smart find-replace with diff preview
+smart_replace("app.py", "old_function()", "new_function()")
+
+# Insert at specific line
+insert_lines("data.csv", 100, "new,data,row")
+
+# Replace line range
+replace_lines("output.txt", 50, 55, "new content")
+```
+
+**This saves massive amounts of tokens** compared to traditional read-entire-file/write-entire-file approaches.
+
+### 🖥️ Terminal & Process Management
+
+- **Command Execution** - Run shell commands with intelligent error handling
+- **Natural Language** - Convert plain English to commands via iFlow API
+- **Interactive REPLs** - Python, Node.js, R, Julia with persistent sessions
+- **Process Management** - Start, interact, monitor, terminate
+
+```python
+# Data analysis workflow
+start_process("python3 -i")
+interact_with_process(pid, "import pandas as pd")
+interact_with_process(pid, "df = pd.read_csv('data.csv')")
+interact_with_process(pid, "print(df.describe())")
+```
+
+### 🔍 Smart Search (Stream-Based, Context-Friendly)
+
+- **File Search** - Find files by name with glob patterns
+- **Content Search** - Search inside files with streaming results
+- **Pagination** - Get results in chunks, stop when you find what you need
+
+```python
+# Search for content across codebase
+start_search("/home/user", "authentication", searchType="content")
+get_more_search_results(session_id, 0, 50)  # Get first 50 results
+```
+
+### 🐛 AI-Powered Debugging
+
+When edits fail or you're stuck, get help from other AI models:
+
+```python
+# Get debugging help from iFlow
+debug_assist("File edit failed, getting unexpected results", "/path/file.py")
+
+# Or get a second opinion from Gemini
+gemini_debug("Can't figure out why this regex isn't matching", "/path/script.sh")
+```
+
+### 🚀 Additional Tools
+
+- **App Launching** - Database of 900+ Linux applications
+- **GUI Automation** - wbind integration for desktop control  
+- **Thread Coordination** - Shared communication file for multi-agent workflows
+- **System Info** - Configuration, usage stats, tool listing
+
+## Supported Clients
+
+- **Claude Desktop** ✅
+- **iFlow CLI** ✅ (with AI education)
+- **Gemini CLI** ✅ (with AI education)
+- **Any MCP-compatible client** ✅
 
 ## Quick Start
 
@@ -30,36 +105,8 @@ pipx install .
 # 3. Run automated installer (configures your AI client + optional auto-start)
 ./install.sh
 
-# That's it! Your AI assistant now has terminal access.
+# That's it! Your AI assistant now has intelligent system access.
 ```
-
-## Features
-
-### 🔥 Core Capabilities
-
-- **Command Execution** - Run shell commands with intelligent error handling
-- **Natural Language** - Convert plain English to commands via iFlow API
-- **Process Management** - Interactive REPLs (Python, Node.js, etc.) with persistent sessions
-- **File Operations** - Read, write, surgical line-level editing
-- **Smart Search** - Stream-based file and content search
-- **App Launching** - Database of 900+ Linux applications
-- **GUI Automation** - wbind integration for desktop control
-- **AI Debugging** - iFlow and Gemini-powered debugging assistance
-
-### 🎯 What Makes It Special
-
-**Automated AI Education:** Installation scripts append comprehensive tool documentation to `~/.iflow/IFLOW.md` and `~/.gemini/GEMINI.md`. Your AI assistants know about TermPipe capabilities from day one—no repetitive explanations needed.
-
-**Systemd Auto-Start:** Optional systemd service means the FastAPI backend starts on boot. Set it up once, never think about it again.
-
-**Surgical Editing:** Line-level file editing tools that minimize token usage and prevent overwriting entire files unnecessarily.
-
-## Supported Clients
-
-- **Claude Desktop** ✅
-- **iFlow CLI** ✅ (with AI education)
-- **Gemini CLI** ✅ (with AI education)
-- **Any MCP-compatible client** ✅
 
 ## Installation
 
@@ -108,37 +155,62 @@ Installation scripts handle this automatically, but manual configs are documente
 - [iFlow CLI setup](INSTALL.md#for-iflow-cli)
 - [Gemini CLI setup](INSTALL.md#for-gemini-cli)
 
-## Usage
+## Usage Examples
 
-After installation, your AI assistant has access to these tools:
+### Surgical File Editing (Token-Efficient)
 
 ```python
-# Command execution
-termf_exec("ls -lah /tmp")
-termf_nlp("find all python files modified today")
+# Read specific lines only
+read_lines("config.py", 50, 60)
 
-# Process management (for data analysis, REPLs)
-start_process("python3 -i")
-interact_with_process(pid, "import pandas as pd")
-interact_with_process(pid, "df = pd.read_csv('data.csv')")
+# Change one value - no full file rewrite
+replace_at_line("settings.json", 15, '"debug": false', '"debug": true')
 
-# File operations
-read_file("/path/to/file.txt", offset=100, length=50)
-write_file("/path/to/file.txt", "new content")
+# Smart replace with automatic conflict detection
+smart_replace("app.py", "old_api_call()", "new_api_call()")
 
-# Surgical editing (minimal changes)
-replace_at_line("/path/file.py", 42, "old_value = 1", "old_value = 2")
-smart_replace("/path/file.py", "DEBUG = False", "DEBUG = True")
-
-# Search
-start_search("/home/user", "TODO", searchType="content")
-get_more_search_results(session_id, offset=0, length=50)
-
-# Debugging
-debug_assist("File edit failed, getting unexpected results", "/path/file.py")
+# Insert without reading entire file
+insert_lines("data.csv", 100, "new,row,data")
 ```
 
-See [AUTOMATED_INSTALL.md](AUTOMATED_INSTALL.md) for tool documentation that gets added to AI memory files.
+### Process Management
+
+```python
+# Start Python REPL for data analysis
+pid = start_process("python3 -i")
+
+# Interactive data analysis
+interact_with_process(pid, "import pandas as pd")
+interact_with_process(pid, "df = pd.read_csv('/data/large_file.csv')")
+interact_with_process(pid, "print(df.groupby('category').sum())")
+
+# Keep session alive between requests
+read_process_output(pid)
+```
+
+### Command Execution
+
+```python
+# Direct command execution
+termf_exec("find /tmp -name '*.log' -mtime -1")
+
+# Natural language to command
+termf_nlp("show me disk usage for the home directory")
+```
+
+### Smart Search
+
+```python
+# Search for files by name
+start_search("/home/user", "*.py", searchType="files")
+
+# Search for content across codebase
+start_search("/project", "TODO|FIXME", searchType="content")
+
+# Paginate through results
+get_more_search_results(session_id, 0, 50)
+get_more_search_results(session_id, 50, 50)
+```
 
 ## Architecture
 
@@ -163,6 +235,42 @@ See [AUTOMATED_INSTALL.md](AUTOMATED_INSTALL.md) for tool documentation that get
 2. **FastAPI Backend** - Runs on port 8421, handles command execution
 
 **Port 8421** is used to avoid conflicts with the original TermPipe (port 8420).
+
+## Tool Categories
+
+### File Operations
+- `read_file` - Read with pagination
+- `write_file` - Write/overwrite
+- `append_file` - Append content
+- `read_lines` - Read specific line range
+- `insert_lines` - Insert at line number
+- `replace_lines` - Replace line range
+- `replace_at_line` - **Most surgical** - change text on one line
+- `smart_replace` - Intelligent find/replace with diff
+- `delete_lines` - Delete line range
+- `find_in_file` - Search with line numbers
+
+### Process Management
+- `start_process` - Start interactive sessions
+- `interact_with_process` - Send input to REPL
+- `read_process_output` - Read with pagination
+- `list_sessions` - Show active sessions
+- `force_terminate` - Kill process
+
+### Command & Search
+- `termf_exec` - Execute shell commands
+- `termf_nlp` - Natural language to command
+- `start_search` - Stream-based file/content search
+- `get_more_search_results` - Paginate results
+- `stop_search` - Stop active search
+
+### AI & System
+- `debug_assist` - iFlow-powered debugging
+- `gemini_debug` - Gemini-powered debugging
+- `launch_app` - Launch from 900+ app database
+- `list_tools` - Show available tools
+- `get_config` - View configuration
+- `system_info` - System details
 
 ## Documentation
 
@@ -229,6 +337,32 @@ Install dependencies:
 sudo apt install pipx jq  # Ubuntu/Debian
 pipx ensurepath
 ```
+
+## Why "Surgical" Matters
+
+Traditional file operations in MCP:
+```python
+# Read entire 1000-line file (uses ~1000 tokens)
+content = read_file("large_file.py")
+
+# AI modifies it in context (uses more tokens)
+modified = modify_content(content)
+
+# Write entire file back (uses ~1000 tokens)
+write_file("large_file.py", modified)
+
+# Total: ~2000+ tokens for one line change
+```
+
+TermPipe surgical approach:
+```python
+# Change one line (uses ~10 tokens)
+replace_at_line("large_file.py", 42, "old", "new")
+
+# Total: ~10 tokens for one line change
+```
+
+**200x token reduction for common operations.** This adds up fast.
 
 ## License
 
