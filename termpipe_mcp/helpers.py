@@ -26,34 +26,67 @@ TERMCP_URL = os.environ.get("TERMCP_URL", "http://localhost:8421")
 
 def get_iflow_credentials() -> Tuple[str, str]:
     """
-    Get iFlow API credentials from config file.
+    Get iFlow API credentials from config files.
+    
+    Tries multiple locations in priority order:
+    1. ~/.termpipe-mcp/config.json (new location)
+    2. ~/.iflow/settings.json (iFlow settings)
+    3. ~/.iflow/oauth_creds.json (iFlow OAuth)
     
     Returns:
         Tuple of (api_key, api_base)
         
     Raises:
-        FileNotFoundError: If config file doesn't exist
-        KeyError: If required keys are missing
+        FileNotFoundError: If no credentials found in any location
     """
-    if not CONFIG_FILE.exists():
-        raise FileNotFoundError(
-            f"Config file not found: {CONFIG_FILE}\n"
-            "Run 'termcp setup' to configure iFlow API credentials"
-        )
+    # Try new TermPipe config first
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+            api_key = config.get('api_key')
+            api_base = config.get('api_base', 'https://apis.iflow.cn/v1')
+            if api_key:
+                return api_key, api_base
+        except Exception:
+            pass
     
-    with open(CONFIG_FILE, 'r') as f:
-        config = json.load(f)
+    # Try iFlow settings.json
+    iflow_settings = HOME / ".iflow" / "settings.json"
+    if iflow_settings.exists():
+        try:
+            with open(iflow_settings, 'r') as f:
+                settings = json.load(f)
+            api_key = settings.get('apiKey')
+            api_base = settings.get('baseUrl', 'https://apis.iflow.cn/v1')
+            if api_key:
+                return api_key, api_base
+        except Exception:
+            pass
     
-    api_key = config.get('api_key')
-    api_base = config.get('api_base', 'https://apis.iflow.cn/v1')
+    # Try iFlow oauth_creds.json
+    iflow_oauth = HOME / ".iflow" / "oauth_creds.json"
+    if iflow_oauth.exists():
+        try:
+            with open(iflow_oauth, 'r') as f:
+                oauth = json.load(f)
+            api_key = oauth.get('apiKey')
+            api_base = 'https://apis.iflow.cn/v1'  # Default for OAuth
+            if api_key:
+                return api_key, api_base
+        except Exception:
+            pass
     
-    if not api_key:
-        raise KeyError(
-            "api_key not found in config file\n"
-            "Run 'termcp setup' to configure iFlow API credentials"
-        )
-    
-    return api_key, api_base
+    # No credentials found anywhere
+    raise FileNotFoundError(
+        "iFlow API credentials not found.\n\n"
+        "Checked:\n"
+        f"  • {CONFIG_FILE}\n"
+        f"  • {iflow_settings}\n"
+        f"  • {iflow_oauth}\n\n"
+        "Configure credentials with: termcp setup"
+    )
+
 
 
 def api_post(endpoint: str, data: dict, timeout: float = 60.0) -> dict:

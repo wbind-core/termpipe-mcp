@@ -1,5 +1,5 @@
 #!/bin/bash
-# Claude Desktop TermPipe MCP Installation Script
+# Claude Desktop TermPipe MCP Installation Script  
 # Automatically configures TermPipe MCP server for Claude Desktop
 
 set -e
@@ -14,11 +14,10 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
-# Get actual username
-USERNAME=$(whoami)
-CLAUDE_DIR="$HOME/.config/Claude"
+# Get configuration from environment or use defaults
+CLAUDE_DIR="${CLAUDE_DESKTOP_DIR:-$HOME/.config/Claude}"
 CONFIG_FILE="$CLAUDE_DIR/claude_desktop_config.json"
-PIPX_PYTHON="/home/$USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python"
+PIPX_PYTHON="$HOME/.local/share/pipx/venvs/termpipe-mcp/bin/python"
 
 # Verify pipx installation
 if [ ! -f "$PIPX_PYTHON" ]; then
@@ -70,19 +69,4 @@ echo "Next steps:"
 echo "1. Start the FastAPI server: termcp server"
 echo "2. Restart Claude Desktop (quit completely and relaunch)"
 echo "3. Claude will automatically connect to TermPipe MCP"
-echo ""
-echo "📝 Note: Claude Desktop uses its GUI for managing memories."
-echo "   You can manually add TermPipe usage instructions to your"
-echo "   user preferences in Claude Desktop settings if desired."
-echo ""
-echo "Test it by asking Claude:"
-echo '   "Use termpipe to list files in my home directory"'
-echo ""
-echo "TermPipe MCP Tools Available to Claude:"
-echo "  • Command execution (termf_exec, termf_nlp)"
-echo "  • Process management (start_process, interact_with_process)"
-echo "  • File operations (read_file, write_file, surgical editing)"
-echo "  • Search (start_search, content/file search)"
-echo "  • App launching (900+ Linux apps)"
-echo "  • AI debugging (debug_assist, gemini_debug)"
 echo ""

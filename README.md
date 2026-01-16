@@ -85,6 +85,44 @@ gemini_debug("Can't figure out why this regex isn't matching", "/path/script.sh"
 - **Thread Coordination** - Shared communication file for multi-agent workflows
 - **System Info** - Configuration, usage stats, tool listing
 
+### 🤖 AI-Powered Debugging (When You Get Stuck)
+
+TermPipe includes intelligent debugging tools that leverage AI models to help when you're stuck:
+
+**iFlow-Powered Tools:**
+- `debug_assist` - AI analyzes your failed attempts and suggests specific fixes
+- `analyze_file_structure` - Understand a file before editing it  
+- `suggest_edit_approach` - Get step-by-step editing strategy
+
+**Gemini-Powered Tools:**
+- `gemini_debug` - Second-opinion debugging from Google's Gemini
+- `gemini_analyze` - Alternative file analysis perspective
+- `gemini_suggest` - Different edit strategy suggestions
+
+```python
+# When you're stuck on a failed edit
+debug_assist(
+    problem="My replace_at_line keeps failing with 'text not found'",
+    file_path="/path/to/file.py",
+    line_range=(40, 60)
+)
+
+# Get a second opinion from Gemini
+gemini_debug(
+    problem="Claude tried 5 times to edit this file - what am I missing?",
+    file_path="/path/to/config.json"
+)
+```
+
+**How It Works:**
+- iFlow: Direct API integration, auto-detected from `~/.iflow/oauth_creds.json`
+- Gemini: Calls `gemini -o text "prompt"` in non-interactive mode
+- Both tools include recent tool call history for context
+- Fast responses (1-3 seconds) perfect for debugging loops
+
+**Pro Tip:** Use `debug_assist` or `gemini_debug` BEFORE retrying failed edits. Don't waste tokens on blind retries—get AI guidance first!
+
+
 ## Supported Clients
 
 - **Claude Desktop** ✅
@@ -151,14 +189,37 @@ Then manually edit your MCP client config (see [INSTALL.md](INSTALL.md)).
 
 ## Configuration
 
-### Get an iFlow API Key
+### AI Features Configuration
+
+**iFlow API (Auto-Detected)**
+
+iFlow credentials are automatically detected from any of:
+1. `~/.termpipe-mcp/config.json` (TermPipe config)
+2. `~/.iflow/settings.json` (iFlow CLI settings)  
+3. `~/.iflow/oauth_creds.json` (iFlow OAuth - most common)
+
+If you already have iFlow CLI installed and configured, **no additional setup needed**!
+
+To manually configure:
+```bash
+termcp setup  # Prompts for API key
+```
 
 Free tier available at: https://iflow.cn
 
-The installer will prompt you for this, or run:
-```bash
-termcp setup
-```
+**Gemini CLI (Command-Line Based)**
+
+Gemini tools work by calling the Gemini CLI in non-interactive mode: `gemini -o text "prompt"`
+
+Requirements:
+- Gemini CLI installed and configured
+- Active Google account with AI Studio access
+
+Install: https://ai.google.dev
+
+No additional TermPipe configuration needed—just have Gemini CLI working.
+
+
 
 ### MCP Client Setup
 
