@@ -108,33 +108,113 @@ try {
     
     $clientsFound = $false
     
+    # Get pipx Python path
+    $pipxVenv = Join-Path $env:USERPROFILE ".local\share\pipx\venvs\termpipe-mcp"
+    if (-not (Test-Path $pipxVenv)) {
+        # Try Windows-style path
+        $pipxVenv = Join-Path $env:LOCALAPPDATA "pipx\venvs\termpipe-mcp"
+    }
+    $pythonPath = Join-Path $pipxVenv "Scripts\python.exe"
+    
     # Check for Claude Desktop
     $claudeDesktopDir = Join-Path $env:APPDATA "Claude"
+    $claudeConfig = Join-Path $claudeDesktopDir "claude_desktop_config.json"
     if (Test-Path $claudeDesktopDir) {
-        Write-Host "✅ Found Claude Desktop" -ForegroundColor Green
-        # Run configuration (would need PowerShell version of install-claude-desktop.sh)
+        Write-Host "✅ Found Claude Desktop - Configuring..." -ForegroundColor Green
+        
+        $mcpServer = @{
+            command = $pythonPath
+            args = @("-m", "termpipe_mcp.server")
+            env = @{ TERMCP_URL = "http://localhost:8421" }
+        }
+        
+        if (-not (Test-Path $claudeConfig)) {
+            @{ mcpServers = @{ termpipe = $mcpServer } } | ConvertTo-Json -Depth 10 | Set-Content $claudeConfig
+        } else {
+            $config = Get-Content $claudeConfig | ConvertFrom-Json
+            if (-not $config.mcpServers) { $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue @{} }
+            $config.mcpServers.termpipe = $mcpServer
+            $config | ConvertTo-Json -Depth 10 | Set-Content $claudeConfig
+        }
+        Write-Host "   ✅ Claude Desktop configured!" -ForegroundColor Green
         $clientsFound = $true
     }
     
     # Check for Claude Code
     $claudeCodeDir = Join-Path $env:USERPROFILE ".claude"
+    $claudeCodeConfig = Join-Path $claudeCodeDir "claude.json"
     if (Test-Path $claudeCodeDir) {
-        Write-Host "✅ Found Claude Code" -ForegroundColor Green
+        Write-Host "✅ Found Claude Code - Configuring..." -ForegroundColor Green
+        
+        $mcpServer = @{
+            command = $pythonPath
+            args = @("-m", "termpipe_mcp.server")
+            env = @{ TERMCP_URL = "http://localhost:8421" }
+        }
+        
+        if (-not (Test-Path (Split-Path $claudeCodeConfig))) {
+            New-Item -ItemType Directory -Path (Split-Path $claudeCodeConfig) -Force | Out-Null
+        }
+        
+        if (-not (Test-Path $claudeCodeConfig)) {
+            @{ mcpServers = @{ termpipe = $mcpServer } } | ConvertTo-Json -Depth 10 | Set-Content $claudeCodeConfig
+        } else {
+            $config = Get-Content $claudeCodeConfig | ConvertFrom-Json
+            if (-not $config.mcpServers) { $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue @{} }
+            $config.mcpServers.termpipe = $mcpServer
+            $config | ConvertTo-Json -Depth 10 | Set-Content $claudeCodeConfig
+        }
+        Write-Host "   ✅ Claude Code configured!" -ForegroundColor Green
         $clientsFound = $true
     }
     
     # Check for iFlow
     if (Test-Path $iflowPath) {
-        Write-Host "✅ Found iFlow CLI" -ForegroundColor Green
+        Write-Host "✅ Found iFlow CLI - Configuring..." -ForegroundColor Green
+        $iflowSettings = Join-Path $iflowPath "settings.json"
+        
+        $mcpServer = @{
+            command = $pythonPath
+            args = @("-m", "termpipe_mcp.server")
+            env = @{ TERMCP_URL = "http://localhost:8421" }
+        }
+        
+        if (-not (Test-Path $iflowSettings)) {
+            @{ mcpServers = @{ termpipe = $mcpServer } } | ConvertTo-Json -Depth 10 | Set-Content $iflowSettings
+        } else {
+            $config = Get-Content $iflowSettings | ConvertFrom-Json
+            if (-not $config.mcpServers) { $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue @{} }
+            $config.mcpServers.termpipe = $mcpServer
+            $config | ConvertTo-Json -Depth 10 | Set-Content $iflowSettings
+        }
+        Write-Host "   ✅ iFlow CLI configured!" -ForegroundColor Green
         $clientsFound = $true
     }
     
     # Check for Gemini
     $geminiPath = Join-Path $env:USERPROFILE ".gemini"
     if (Test-Path $geminiPath) {
-        Write-Host "✅ Found Gemini CLI" -ForegroundColor Green
+        Write-Host "✅ Found Gemini CLI - Configuring..." -ForegroundColor Green
+        $geminiSettings = Join-Path $geminiPath "settings.json"
+        
+        $mcpServer = @{
+            command = $pythonPath
+            args = @("-m", "termpipe_mcp.server")
+            env = @{ TERMCP_URL = "http://localhost:8421" }
+        }
+        
+        if (-not (Test-Path $geminiSettings)) {
+            @{ mcpServers = @{ termpipe = $mcpServer } } | ConvertTo-Json -Depth 10 | Set-Content $geminiSettings
+        } else {
+            $config = Get-Content $geminiSettings | ConvertFrom-Json
+            if (-not $config.mcpServers) { $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue @{} }
+            $config.mcpServers.termpipe = $mcpServer
+            $config | ConvertTo-Json -Depth 10 | Set-Content $geminiSettings
+        }
+        Write-Host "   ✅ Gemini CLI configured!" -ForegroundColor Green
         $clientsFound = $true
     }
+
     
     if (-not $clientsFound) {
         Write-Host "⚠️  No MCP clients detected on this system." -ForegroundColor Yellow
@@ -147,17 +227,20 @@ try {
     }
     
     Write-Host ""
+    
+    Write-Host ""
     Write-Host "════════════════════════════════════════════════════════════"
     Write-Host "✅ TermPipe MCP installation complete!" -ForegroundColor Green
     Write-Host "════════════════════════════════════════════════════════════"
     Write-Host ""
     Write-Host "📋 Next Steps:"
     Write-Host "1. Start TermPipe server: termcp server"
-    Write-Host "2. Configure your MCP clients manually (see README.md)"
+    Write-Host "2. Restart your MCP clients (Claude Desktop, Claude Code, etc.)"
+    Write-Host "3. MCP tools will be available automatically!"
     Write-Host ""
-    Write-Host "💡 Note: Windows doesn't support auto-start via this installer."
-    Write-Host "   You'll need to start the server manually or create a startup task."
+    Write-Host "💡 Tip: Keep the server running or set up Windows auto-start manually"
     Write-Host ""
+
     
 } catch {
     Write-Host "❌ Installation failed: $_" -ForegroundColor Red
