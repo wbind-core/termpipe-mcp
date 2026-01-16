@@ -133,80 +133,50 @@ gemini_debug(
 
 
 
-## Quick Start
 
-**One command. Pick your OS.**
+## Installation
 
-### macOS / Linux
+### Method 1: Quick Install (Highly Recommended)
+
+**macOS / Linux:**
 ```bash
 curl -sSL https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.sh | bash
 ```
 
-### Windows
+**Windows:**
 ```powershell
 iwr -useb https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.ps1 | iex
 ```
 
+**What happens automatically:**
+- Detects your OS
+- Offers optional iFlow AI debugging setup (FREE SOTA models)
+- Installs TermPipe via pipx
+- Auto-detects ALL installed MCP clients (Claude Desktop, Claude Code, iFlow, Gemini)
+- Auto-configures each client (creates/merges JSON configs)
+- Sets up auto-start (systemd on Linux, launchd on macOS)
+
+**Zero manual configuration required.**
+
 ---
 
-**What happens:**
-1. Detects your OS
-2. Offers optional iFlow AI debugging setup (FREE SOTA models)
-3. Installs TermPipe via pipx
-4. Auto-detects ALL installed MCP clients (Claude Desktop, Claude Code, iFlow, Gemini)
-5. Configures each client automatically
-6. Sets up auto-start (systemd/launchd - Linux/macOS only)
-
-**Supported Platforms:**
-- ✅ Linux (Ubuntu 20.04+, Debian 10+, Fedora, Arch - any distro)
-- ✅ macOS 10.15+ (Catalina and newer)  
-- ✅ Windows 10/11 (PowerShell)
-
-**Supported Clients (auto-configured):**
-- Claude Desktop
-- Claude Code  
-- iFlow CLI
-- Gemini CLI
-
-
-## Installation
-
-### One-Line Install (Recommended)
-
-```bash
-curl -sSL https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.sh | bash
-```
-
-### Manual Install
+### Method 2: Manual Install
 
 ```bash
 git clone https://github.com/wbind-core/termpipe-mcp.git
 cd termpipe-mcp
 pipx install .
-./install.sh
+./quick-install.sh  # Runs the automated setup
 ```
 
-Both methods:
-- **Auto-detect** which MCP clients you have installed
-- **Auto-configure** all detected clients (Claude Desktop, Claude Code, iFlow, Gemini)
-- Educate AI assistants via memory files (Claude Code, iFlow, Gemini)
-- Optionally set up systemd service for auto-start
-- Verify everything works
-
-**No manual JSON editing required!**
-
-
-### Even More Manual
-
+Or for complete manual control:
 ```bash
-git clone https://github.com/wbind-core/termpipe-mcp.git
-cd termpipe-mcp
 pipx install .
-termcp setup  # Configure iFlow API key
-termcp server # Start backend (keep running)
+termcp setup        # Configure iFlow API key (optional)
+termcp server       # Start backend (keep running)
+# Then manually edit your MCP client configs (see INSTALL.md)
 ```
 
-Then manually edit your MCP client config (see [INSTALL.md](INSTALL.md)).
 
 
 ## Configuration
