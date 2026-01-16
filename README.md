@@ -1,194 +1,248 @@
-# TermPipe MCP Server
+# TermPipe MCP
 
-Standalone MCP server that provides MCP clients (Claude Desktop, iFlow CLI, etc.) with powerful terminal automation, file operations, and intelligent command execution.
+> **Terminal automation that just works.** Production-ready MCP server for Claude Desktop, iFlow CLI, and Gemini CLI.
+
+## What Is This?
+
+TermPipe MCP gives AI assistants **direct, intelligent access to your terminal**. Execute commands, manage files, run REPLs, launch apps, and get AI-powered debugging assistance—all through a clean, reliable MCP interface.
+
+**The killer feature:** Automated installation scripts that **educate your AI assistants** about available tools. iFlow and Gemini learn about TermPipe capabilities automatically—no manual explanation needed in every session.
+
+## Why TermPipe MCP?
+
+- ✅ **Just Works** - One command installation with auto-configuration
+- 🧠 **AI Education** - Assistants learn available tools automatically  
+- 🚀 **Auto-Start** - Optional systemd service for boot-time startup
+- 🔧 **Battle-Tested** - 12 tool modules covering common automation needs
+- 🎯 **Zero Config Conflicts** - Runs on port 8421, isolated from other tools
+- 📝 **Comprehensive** - File ops, process management, search, debugging
+
+## Quick Start
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/wbind-core/termpipe-mcp.git
+cd termpipe-mcp
+
+# 2. Install
+pipx install .
+
+# 3. Run automated installer (configures your AI client + optional auto-start)
+./install.sh
+
+# That's it! Your AI assistant now has terminal access.
+```
 
 ## Features
 
-- **Command Execution**: Run shell commands with intelligent error handling
-- **Natural Language Processing**: Convert plain English to terminal commands
-- **Process Management**: Interactive REPLs (Python, Node, etc.) with persistent sessions
-- **File Operations**: Read, write, search, and surgical editing
-- **App Launching**: Database of 900+ Linux applications
-- **GUI Automation**: wbind integration for desktop control
-- **AI Debugging**: iFlow and Gemini-powered debugging assistance
+### 🔥 Core Capabilities
 
-## Architecture
+- **Command Execution** - Run shell commands with intelligent error handling
+- **Natural Language** - Convert plain English to commands via iFlow API
+- **Process Management** - Interactive REPLs (Python, Node.js, etc.) with persistent sessions
+- **File Operations** - Read, write, surgical line-level editing
+- **Smart Search** - Stream-based file and content search
+- **App Launching** - Database of 900+ Linux applications
+- **GUI Automation** - wbind integration for desktop control
+- **AI Debugging** - iFlow and Gemini-powered debugging assistance
 
-This package is completely self-contained and consists of two components:
+### 🎯 What Makes It Special
 
-1. **FastAPI Server** (`termcp server`) - Lightweight backend for command execution and NLP (port 8421)
-2. **MCP Server** (auto-started by MCP clients) - Tool interface for any MCP client
+**Automated AI Education:** Installation scripts append comprehensive tool documentation to `~/.iflow/IFLOW.md` and `~/.gemini/GEMINI.md`. Your AI assistants know about TermPipe capabilities from day one—no repetitive explanations needed.
 
-**Note:** TermPipe MCP uses port 8421 to avoid conflict with the main TermPipe server (port 8420).
+**Systemd Auto-Start:** Optional systemd service means the FastAPI backend starts on boot. Set it up once, never think about it again.
 
-**Supported MCP Clients:**
-- Claude Desktop
-- iFlow CLI
-- Gemini CLI
-- Any other MCP-compatible client
+**Surgical Editing:** Line-level file editing tools that minimize token usage and prevent overwriting entire files unnecessarily.
+
+## Supported Clients
+
+- **Claude Desktop** ✅
+- **iFlow CLI** ✅ (with AI education)
+- **Gemini CLI** ✅ (with AI education)
+- **Any MCP-compatible client** ✅
 
 ## Installation
 
-### Automated Installation (Recommended)
-
-The easiest way to get started:
+### Method 1: Automated (Recommended)
 
 ```bash
-# 1. Install the package
-pipx install /path/to/termpipe-mcp
-
-# 2. Run the automated installer
-cd /path/to/termpipe-mcp
+git clone https://github.com/wbind-core/termpipe-mcp.git
+cd termpipe-mcp
+pipx install .
 ./install.sh
 ```
 
-The installer will:
-- Configure your MCP client(s) automatically
-- Add TermPipe documentation to iFlow/Gemini memory files
-- Optionally setup systemd service for auto-start on boot
-- Verify your installation
+The installer:
+- Configures your MCP client(s) automatically
+- Educates AI assistants via memory files (iFlow/Gemini)
+- Optionally sets up systemd service for auto-start
+- Verifies everything works
 
-See [AUTOMATED_INSTALL.md](AUTOMATED_INSTALL.md) for details.
-
-### Manual Installation
+### Method 2: Manual
 
 ```bash
-# Install the package
-pipx install /path/to/termpipe-mcp
-
-# Start the FastAPI backend (in a terminal)
-termcp server
-
-# Your MCP client will auto-connect to the MCP server
+git clone https://github.com/wbind-core/termpipe-mcp.git
+cd termpipe-mcp
+pipx install .
+termcp setup  # Configure iFlow API key
+termcp server # Start backend (keep running)
 ```
 
-See [INSTALL.md](INSTALL.md) for detailed manual setup instructions.
+Then manually edit your MCP client config (see [INSTALL.md](INSTALL.md)).
 
 ## Configuration
 
-### For Claude Desktop
+### Get an iFlow API Key
 
-Add to `~/.config/Claude/claude_desktop_config.json`:
+Free tier available at: https://iflow.cn
 
-```json
-{
-  "mcpServers": {
-    "termpipe": {
-      "command": "/home/YOUR_USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python",
-      "args": ["-m", "termpipe_mcp.server"],
-      "env": {
-        "TERMCP_URL": "http://localhost:8421"
-      }
-    }
-  }
-}
+The installer will prompt you for this, or run:
+```bash
+termcp setup
 ```
 
-### For iFlow CLI
+### MCP Client Setup
 
-Add to `~/.iflow/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "termpipe": {
-      "description": "TermPipe MCP - Terminal automation, file operations, and AI-powered command execution",
-      "command": "/home/YOUR_USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python",
-      "args": ["-m", "termpipe_mcp.server"],
-      "env": {
-        "TERMCP_URL": "http://localhost:8421"
-      }
-    }
-  }
-}
-```
-
-### For Gemini CLI
-
-Add to `~/.gemini/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "termpipe": {
-      "command": "/home/YOUR_USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python",
-      "args": ["-m", "termpipe_mcp.server"],
-      "env": {
-        "TERMCP_URL": "http://localhost:8421"
-      }
-    }
-  }
-}
-```
-
-### API Configuration (Required)
-
-```json
-{
-  "api_key": "YOUR_IFLOW_API_KEY",
-  "api_base": "https://apis.iflow.cn/v1",
-  "default_model": "qwen3-coder-plus"
-}
-```
-
-Get a free iFlow API key at: https://iflow.cn
+Installation scripts handle this automatically, but manual configs are documented in:
+- [Claude Desktop setup](INSTALL.md#for-claude-desktop)
+- [iFlow CLI setup](INSTALL.md#for-iflow-cli)
+- [Gemini CLI setup](INSTALL.md#for-gemini-cli)
 
 ## Usage
 
-### Start the Backend
+After installation, your AI assistant has access to these tools:
 
-```bash
-# Start the FastAPI server (required)
-termcp server
+```python
+# Command execution
+termf_exec("ls -lah /tmp")
+termf_nlp("find all python files modified today")
+
+# Process management (for data analysis, REPLs)
+start_process("python3 -i")
+interact_with_process(pid, "import pandas as pd")
+interact_with_process(pid, "df = pd.read_csv('data.csv')")
+
+# File operations
+read_file("/path/to/file.txt", offset=100, length=50)
+write_file("/path/to/file.txt", "new content")
+
+# Surgical editing (minimal changes)
+replace_at_line("/path/file.py", 42, "old_value = 1", "old_value = 2")
+smart_replace("/path/file.py", "DEBUG = False", "DEBUG = True")
+
+# Search
+start_search("/home/user", "TODO", searchType="content")
+get_more_search_results(session_id, offset=0, length=50)
+
+# Debugging
+debug_assist("File edit failed, getting unexpected results", "/path/file.py")
 ```
 
-Leave this running in a terminal. It provides the execution backend.
+See [AUTOMATED_INSTALL.md](AUTOMATED_INSTALL.md) for tool documentation that gets added to AI memory files.
 
-### Use in MCP Clients
+## Architecture
 
-Once both servers are running, your MCP client (Claude Desktop, iFlow CLI, Gemini CLI, etc.) has access to all TermPipe tools:
+```
+┌──────────────────┐
+│  MCP Clients     │
+│  - Claude Desktop│
+│  - iFlow CLI     │
+│  - Gemini CLI    │
+└────────┬─────────┘
+         │ MCP Protocol
+         ▼
+┌─────────────────────┐     HTTP          ┌──────────────────┐
+│ termpipe-mcp        │ ◄───────────────► │ FastAPI Server   │
+│ MCP Server          │  localhost:8421   │ (termcp server)  │
+│ (12 tool modules)   │                   │                  │
+└─────────────────────┘                   └──────────────────┘
+```
 
-- File operations: `read_file`, `write_file`, `edit_block`
-- Process management: `start_process`, `interact_with_process`
-- Command execution: `termf_exec`, `termf_nlp`
-- Search: `start_search`, `get_more_search_results`
-- Debugging: `debug_assist`, `gemini_debug`
+**Two-component design:**
+1. **MCP Server** - Auto-started by MCP clients, provides tool interface
+2. **FastAPI Backend** - Runs on port 8421, handles command execution
+
+**Port 8421** is used to avoid conflicts with the original TermPipe (port 8420).
+
+## Documentation
+
+- **[INSTALL.md](INSTALL.md)** - Complete installation guide
+- **[AUTOMATED_INSTALL.md](AUTOMATED_INSTALL.md)** - Installation scripts documentation
+- **[VERIFICATION.md](VERIFICATION.md)** - Testing and troubleshooting
+- **[SYSTEMD_SERVICE.md](SYSTEMD_SERVICE.md)** - Auto-start on boot setup
 
 ## Development
 
 ```bash
-# Install in development mode
+# Clone and install in dev mode
+git clone https://github.com/wbind-core/termpipe-mcp.git
 cd termpipe-mcp
+pipx install -e .
+
+# Make changes
+vim termpipe_mcp/tools/mynewtool.py
+
+# Reinstall
 pipx install -e . --force
 
-# Run tests
-pytest
-
-# Format code
-black termpipe_mcp/
+# Test
+termcp server  # Start backend
+# Then test via your MCP client
 ```
 
 ## Troubleshooting
 
-### FastAPI server not connecting
-
+### Server won't start
 ```bash
-# Check if server is running
-curl http://localhost:8421/health
+# Check if port 8421 is in use
+lsof -i :8421
 
-# Start manually
-termcp server
-
-# Check logs
-tail -f ~/.termpipe-mcp/server.log
+# View logs
+journalctl --user -u termpipe-mcp -f  # If using systemd
+tail -f ~/.termpipe-mcp/server.log    # Manual logs
 ```
 
-### MCP tools not working
+### MCP tools not appearing
+1. Restart your MCP client (Claude Desktop, iFlow CLI, etc.)
+2. Check client logs for connection errors
+3. Verify `termcp server` is running
 
-1. Ensure FastAPI server is running (`termcp server`)
-2. Check Claude Desktop logs
-3. Verify config.json has valid API key
+### Import errors after installation
+```bash
+# Verify installation
+pipx list | grep termpipe-mcp
+
+# Reinstall if needed
+cd /path/to/termpipe-mcp
+pipx install . --force
+```
+
+## Requirements
+
+- **Python 3.10+**
+- **pipx** - For isolated package installation
+- **jq** - For installation scripts (JSON manipulation)
+- **Linux** - Primary platform (Ubuntu/Debian tested)
+
+Install dependencies:
+```bash
+sudo apt install pipx jq  # Ubuntu/Debian
+pipx ensurepath
+```
 
 ## License
 
 MIT © 2026 Craig Nelson
+
+## Contributing
+
+Issues and pull requests welcome! This is a production tool being actively developed and used.
+
+## Credits
+
+Built with:
+- [FastMCP](https://github.com/jlowin/fastmcp) - MCP server framework
+- [FastAPI](https://fastapi.tiangolo.com/) - Backend server
+- [httpx](https://www.python-httpx.org/) - HTTP client
+
+Part of the [TermPipe](https://github.com/wbind-core) ecosystem.
