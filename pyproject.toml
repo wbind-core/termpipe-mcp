@@ -1,0 +1,70 @@
+[project]
+name = "termpipe-mcp"
+version = "2.0.0"
+description = "TermPipe MCP Server - Universal MCP server for terminal automation (Claude Desktop, iFlow CLI, Gemini CLI, etc.)"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Craig Nelson", email = "craig@termpipe.ai"}
+]
+requires-python = ">=3.10"
+keywords = ["mcp", "claude", "terminal", "automation", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development",
+    "Topic :: Terminals",
+]
+
+dependencies = [
+    # MCP Framework
+    "fastmcp>=0.1.0",
+    
+    # FastAPI Server Components
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.5.0",
+    
+    # HTTP Client
+    "httpx>=0.26.0",
+    
+    # Async Support
+    "aiohttp>=3.9.0",
+    "aiofiles>=23.2.0",
+    
+    # Additional Dependencies
+    "python-multipart>=0.0.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+termcp = "termpipe_mcp.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/termpipe/termpipe-mcp"
+Documentation = "https://termpipe.ai/docs/mcp"
+Repository = "https://github.com/termpipe/termpipe-mcp"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["termpipe_mcp"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
