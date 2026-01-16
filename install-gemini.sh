@@ -1,6 +1,6 @@
 #!/bin/bash
-# Gemini CLI TermPipe MCP Installation Script
-# Automatically configures TermPipe MCP server for Gemini CLI
+#!/bin/bash
+# Gemini CLI TermPipe MCP Installation Script (Cross-Platform)
 
 set -e
 
@@ -14,13 +14,13 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
-# Get actual username
-USERNAME=$(whoami)
+# Cross-platform paths
 GEMINI_DIR="$HOME/.gemini"
 SETTINGS_FILE="$GEMINI_DIR/settings.json"
 GEMINI_MD="$GEMINI_DIR/GEMINI.md"
-PIPX_PYTHON="/home/$USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python"
+PIPX_PYTHON="$HOME/.local/share/pipx/venvs/termpipe-mcp/bin/python"
 
+PIPX_PYTHON="/home/$USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python"
 # Verify pipx installation
 if [ ! -f "$PIPX_PYTHON" ]; then
     echo "❌ Error: TermPipe MCP not found at $PIPX_PYTHON"

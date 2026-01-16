@@ -135,17 +135,29 @@ gemini_debug(
 
 ## Quick Start
 
-**One command. That's it.**
+**One command. All platforms.**
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.sh | bash
 ```
 
-This will:
-- Clone the repo
-- Install the package via pipx
-- Run the interactive installer (configure clients + optional auto-start)
-- Get you up and running in under 60 seconds
+**What it does:**
+1. Detects your OS (Linux, macOS, Windows/Git Bash)
+2. Offers optional iFlow setup for AI debugging features
+3. Installs TermPipe MCP via pipx
+4. Auto-detects and configures all installed MCP clients
+5. Sets up auto-start (systemd on Linux, launchd on macOS)
+
+**Supported Platforms:**
+- ✅ **Linux** - Ubuntu 20.04+, Debian 10+, Fedora, Arch
+- ✅ **macOS** - 10.15+ (Catalina and newer)  
+- ✅ **Windows** - Via Git Bash or WSL
+
+**Supported Clients (auto-configured):**
+- Claude Desktop
+- Claude Code  
+- iFlow CLI
+- Gemini CLI
 
 ## Installation
 

@@ -1,6 +1,6 @@
 #!/bin/bash
-# iFlow CLI TermPipe MCP Installation Script
-# Automatically configures TermPipe MCP server for iFlow CLI
+#!/bin/bash
+# iFlow CLI TermPipe MCP Installation Script (Cross-Platform)
 
 set -e
 
@@ -14,13 +14,13 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
-# Get actual username
-USERNAME=$(whoami)
+# Cross-platform paths
 IFLOW_DIR="$HOME/.iflow"
 SETTINGS_FILE="$IFLOW_DIR/settings.json"
 IFLOW_MD="$IFLOW_DIR/IFLOW.md"
-PIPX_PYTHON="/home/$USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python"
+PIPX_PYTHON="$HOME/.local/share/pipx/venvs/termpipe-mcp/bin/python"
 
+PIPX_PYTHON="/home/$USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python"
 # Verify pipx installation
 if [ ! -f "$PIPX_PYTHON" ]; then
     echo "❌ Error: TermPipe MCP not found at $PIPX_PYTHON"

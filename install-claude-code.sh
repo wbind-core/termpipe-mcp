@@ -1,12 +1,18 @@
 #!/bin/bash
-# TermPipe MCP - Claude Code Installation Script
+#!/bin/bash
+# TermPipe MCP - Claude Code Installation Script (Cross-Platform)
 
 set -e
 
 USERNAME=$(whoami)
-CLAUDE_CODE_CONFIG="$HOME/.claude.json"
-CLAUDE_MD="$HOME/.claude/CLAUDE.md"
-PYTHON_PATH="/home/$USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python"
+
+# Use environment variable if available, otherwise default to Linux path
+CLAUDE_DIR="${CLAUDE_CODE_DIR:-$HOME/.claude}"
+CLAUDE_CODE_CONFIG="$CLAUDE_DIR/claude.json"
+CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+
+# Cross-platform Python path (no hardcoded /home/)
+PYTHON_PATH="$HOME/.local/share/pipx/venvs/termpipe-mcp/bin/python"
 TERMCP_MARKER="# TermPipe MCP Documentation"
 
 echo "════════════════════════════════════════════════════════════"
