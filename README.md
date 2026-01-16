@@ -92,25 +92,30 @@ gemini_debug("Can't figure out why this regex isn't matching", "/path/script.sh"
 - **Gemini CLI** ✅ (with AI education)
 - **Any MCP-compatible client** ✅
 
+
 ## Quick Start
 
+**One command. That's it.**
+
 ```bash
-# 1. Clone the repo
-git clone https://github.com/wbind-core/termpipe-mcp.git
-cd termpipe-mcp
-
-# 2. Install
-pipx install .
-
-# 3. Run automated installer (configures your AI client + optional auto-start)
-./install.sh
-
-# That's it! Your AI assistant now has intelligent system access.
+curl -sSL https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.sh | bash
 ```
+
+This will:
+- Clone the repo
+- Install the package via pipx
+- Run the interactive installer (configure clients + optional auto-start)
+- Get you up and running in under 60 seconds
 
 ## Installation
 
-### Method 1: Automated (Recommended)
+### One-Line Install (Recommended)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.sh | bash
+```
+
+### Manual Install
 
 ```bash
 git clone https://github.com/wbind-core/termpipe-mcp.git
@@ -119,13 +124,13 @@ pipx install .
 ./install.sh
 ```
 
-The installer:
-- Configures your MCP client(s) automatically
-- Educates AI assistants via memory files (iFlow/Gemini)
-- Optionally sets up systemd service for auto-start
-- Verifies everything works
+Both methods:
+- Configure your MCP client(s) automatically
+- Educate AI assistants via memory files (iFlow/Gemini)
+- Optionally set up systemd service for auto-start
+- Verify everything works
 
-### Method 2: Manual
+### Even More Manual
 
 ```bash
 git clone https://github.com/wbind-core/termpipe-mcp.git
@@ -136,6 +141,7 @@ termcp server # Start backend (keep running)
 ```
 
 Then manually edit your MCP client config (see [INSTALL.md](INSTALL.md)).
+
 
 ## Configuration
 
