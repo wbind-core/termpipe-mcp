@@ -173,122 +173,18 @@ If you need to manually add an iFlow API key later: `termcp setup`
 That's it.
 
 
-## Usage Examples
 
-### Surgical File Editing (Token-Efficient)
+## Why TermPipe?
 
-```python
-# Read specific lines only
-read_lines("config.py", 50, 60)
+**Saves you money.** Surgical editing tools use 90% fewer tokens than rewriting entire files. Token-efficient operations mean lower API costs.
 
-# Change one value - no full file rewrite
-replace_at_line("settings.json", 15, '"debug": false', '"debug": true')
+**AI-powered debugging.** Built-in iFlow and Gemini integration means when Claude gets stuck, it calls smarter models to get unstuck. No more retry loops burning your context.
 
-# Smart replace with automatic conflict detection
-smart_replace("app.py", "old_api_call()", "new_api_call()")
+**Zero friction.** One command installs everything. No JSON editing, no manual configuration, no bullshit.
 
-# Insert without reading entire file
-insert_lines("data.csv", 100, "new,row,data")
-```
+**Actually works.** Persistent REPL sessions, smart search, process management, app launching - the tools you actually need for real work.
 
-### Process Management
-
-```python
-# Start Python REPL for data analysis
-pid = start_process("python3 -i")
-
-# Interactive data analysis
-interact_with_process(pid, "import pandas as pd")
-interact_with_process(pid, "df = pd.read_csv('/data/large_file.csv')")
-interact_with_process(pid, "print(df.groupby('category').sum())")
-
-# Keep session alive between requests
-read_process_output(pid)
-```
-
-### Command Execution
-
-```python
-# Direct command execution
-termf_exec("find /tmp -name '*.log' -mtime -1")
-
-# Natural language to command
-termf_nlp("show me disk usage for the home directory")
-```
-
-### Smart Search
-
-```python
-# Search for files by name
-start_search("/home/user", "*.py", searchType="files")
-
-# Search for content across codebase
-start_search("/project", "TODO|FIXME", searchType="content")
-
-# Paginate through results
-get_more_search_results(session_id, 0, 50)
-get_more_search_results(session_id, 50, 50)
-```
-
-## Architecture
-
-```
-┌──────────────────┐
-│  MCP Clients     │
-│  - Claude Desktop│
-│  - iFlow CLI     │
-│  - Gemini CLI    │
-└────────┬─────────┘
-         │ MCP Protocol
-         ▼
-┌─────────────────────┐     HTTP          ┌──────────────────┐
-│ termpipe-mcp        │ ◄───────────────► │ FastAPI Server   │
-│ MCP Server          │  localhost:8421   │ (termcp server)  │
-│ (12 tool modules)   │                   │                  │
-└─────────────────────┘                   └──────────────────┘
-```
-
-**Two-component design:**
-1. **MCP Server** - Auto-started by MCP clients, provides tool interface
-2. **FastAPI Backend** - Runs on port 8421, handles command execution
-
-**Port 8421** is used to avoid conflicts with the original TermPipe (port 8420).
-
-## Tool Categories
-
-### File Operations
-- `read_file` - Read with pagination
-- `write_file` - Write/overwrite
-- `append_file` - Append content
-- `read_lines` - Read specific line range
-- `insert_lines` - Insert at line number
-- `replace_lines` - Replace line range
-- `replace_at_line` - **Most surgical** - change text on one line
-- `smart_replace` - Intelligent find/replace with diff
-- `delete_lines` - Delete line range
-- `find_in_file` - Search with line numbers
-
-### Process Management
-- `start_process` - Start interactive sessions
-- `interact_with_process` - Send input to REPL
-- `read_process_output` - Read with pagination
-- `list_sessions` - Show active sessions
-- `force_terminate` - Kill process
-
-### Command & Search
-- `termf_exec` - Execute shell commands
-- `termf_nlp` - Natural language to command
-- `start_search` - Stream-based file/content search
-- `get_more_search_results` - Paginate results
-- `stop_search` - Stop active search
-
-### AI & System
-- `debug_assist` - iFlow-powered debugging
-- `gemini_debug` - Gemini-powered debugging
-- `launch_app` - Launch from 900+ app database
-- `list_tools` - Show available tools
-- `get_config` - View configuration
-- `system_info` - System details
+---
 
 ## Documentation
 
