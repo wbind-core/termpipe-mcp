@@ -136,7 +136,7 @@ gemini_debug(
 
 ## Installation
 
-### Method 1: Quick Install (Highly Recommended)
+### Method 1: Quick Install (Recommended)
 
 **macOS / Linux:**
 ```bash
@@ -148,15 +148,7 @@ curl -sSL https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick
 iwr -useb https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.ps1 | iex
 ```
 
-**What happens automatically:**
-- Detects your OS
-- Offers optional iFlow AI debugging setup (FREE SOTA models)
-- Installs TermPipe via pipx
-- Auto-detects ALL installed MCP clients (Claude Desktop, Claude Code, iFlow, Gemini)
-- Auto-configures each client (creates/merges JSON configs)
-- Sets up auto-start (systemd on Linux, launchd on macOS)
-
-**Zero manual configuration required.**
+**Done.** Everything is auto-detected and configured. Zero manual steps.
 
 ---
 
@@ -166,59 +158,20 @@ iwr -useb https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick
 git clone https://github.com/wbind-core/termpipe-mcp.git
 cd termpipe-mcp
 pipx install .
-./quick-install.sh  # Runs the automated setup
+./quick-install.sh  # Still automated
 ```
 
-Or for complete manual control:
-```bash
-pipx install .
-termcp setup        # Configure iFlow API key (optional)
-termcp server       # Start backend (keep running)
-# Then manually edit your MCP client configs (see INSTALL.md)
-```
 
 
 
 ## Configuration
 
-### AI Features Configuration
+**There is no configuration.** The installer auto-detects everything and configures all clients automatically.
 
-**iFlow API (Auto-Detected)**
+If you need to manually add an iFlow API key later: `termcp setup`
 
-iFlow credentials are automatically detected from any of:
-1. `~/.termpipe-mcp/config.json` (TermPipe config)
-2. `~/.iflow/settings.json` (iFlow CLI settings)  
-3. `~/.iflow/oauth_creds.json` (iFlow OAuth - most common)
+That's it.
 
-If you already have iFlow CLI installed and configured, **no additional setup needed**!
-
-To manually configure:
-```bash
-termcp setup  # Prompts for API key
-```
-
-Free tier available at: https://iflow.cn
-
-**Gemini CLI (Command-Line Based)**
-
-Gemini tools work by calling the Gemini CLI in non-interactive mode: `gemini -o text "prompt"`
-
-Requirements:
-- Gemini CLI installed and configured
-- Active Google account with AI Studio access
-
-Install: https://ai.google.dev
-
-No additional TermPipe configuration needed—just have Gemini CLI working.
-
-
-
-### MCP Client Setup
-
-Installation scripts handle this automatically, but manual configs are documented in:
-- [Claude Desktop setup](INSTALL.md#for-claude-desktop)
-- [iFlow CLI setup](INSTALL.md#for-iflow-cli)
-- [Gemini CLI setup](INSTALL.md#for-gemini-cli)
 
 ## Usage Examples
 
