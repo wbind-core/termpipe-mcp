@@ -88,9 +88,11 @@ gemini_debug("Can't figure out why this regex isn't matching", "/path/script.sh"
 ## Supported Clients
 
 - **Claude Desktop** ✅
+- **Claude Code** ✅ (with AI education)
 - **iFlow CLI** ✅ (with AI education)
 - **Gemini CLI** ✅ (with AI education)
 - **Any MCP-compatible client** ✅
+
 
 
 ## Quick Start
@@ -125,10 +127,14 @@ pipx install .
 ```
 
 Both methods:
-- Configure your MCP client(s) automatically
-- Educate AI assistants via memory files (iFlow/Gemini)
+- **Auto-detect** which MCP clients you have installed
+- **Auto-configure** all detected clients (Claude Desktop, Claude Code, iFlow, Gemini)
+- Educate AI assistants via memory files (Claude Code, iFlow, Gemini)
 - Optionally set up systemd service for auto-start
 - Verify everything works
+
+**No manual JSON editing required!**
+
 
 ### Even More Manual
 

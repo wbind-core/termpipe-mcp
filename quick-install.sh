@@ -56,6 +56,14 @@ if [ -d "$HOME/.config/Claude" ]; then
     echo ""
 fi
 
+# Check for Claude Code  
+if [ -d "$HOME/.claude" ] || [ -f "$HOME/.claude.json" ]; then
+    echo "✅ Found Claude Code"
+    bash ./claude-code-install.sh
+    CLIENTS_FOUND=true
+    echo ""
+fi
+
 # Check for iFlow CLI
 if [ -d "$HOME/.iflow" ]; then
     echo "✅ Found iFlow CLI"
@@ -77,6 +85,7 @@ if [ "$CLIENTS_FOUND" = false ]; then
     echo ""
     echo "Available clients:"
     echo "  • Claude Desktop - https://claude.ai/download"
+    echo "  • Claude Code - https://code.claude.com"
     echo "  • iFlow CLI - https://iflow.cn"
     echo "  • Gemini CLI - https://ai.google.dev"
     echo ""
