@@ -173,7 +173,7 @@ replace_at_line("config.py", 55, "old", "new")
   "mcpServers": {
     "termpipe": {
       "description": "TermPipe MCP - Terminal automation...",
-      "command": "/home/USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python",
+      "command": "/home/youruser/.local/share/pipx/venvs/termpipe-mcp/bin/python",
       "args": ["-m", "termpipe_mcp.server"],
       "env": {
         "TERMCP_URL": "http://localhost:8421"
@@ -189,7 +189,7 @@ replace_at_line("config.py", 55, "old", "new")
 {
   "mcpServers": {
     "termpipe": {
-      "command": "/home/USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python",
+      "command": "/home/youruser/.local/share/pipx/venvs/termpipe-mcp/bin/python",
       "args": ["-m", "termpipe_mcp.server"],
       "env": {
         "TERMCP_URL": "http://localhost:8421"
@@ -205,7 +205,7 @@ replace_at_line("config.py", 55, "old", "new")
 {
   "mcpServers": {
     "termpipe": {
-      "command": "/home/USERNAME/.local/share/pipx/venvs/termpipe-mcp/bin/python",
+      "command": "/home/youruser/.local/share/pipx/venvs/termpipe-mcp/bin/python",
       "args": ["-m", "termpipe_mcp.server"],
       "env": {
         "TERMCP_URL": "http://localhost:8421"
