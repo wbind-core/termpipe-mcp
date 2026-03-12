@@ -14,7 +14,8 @@ def register_tools(mcp):
     def debug_assist(
         problem: str,
         file_path: Optional[str] = None,
-        line_range: Optional[tuple[int, int]] = None,
+        line_start: Optional[int] = None,
+        line_end: Optional[int] = None,
         include_history: bool = True
     ) -> str:
         """
@@ -32,7 +33,8 @@ def register_tools(mcp):
         Args:
             problem: Describe what you're trying to do and what's going wrong
             file_path: Optional file to include as context
-            line_range: Optional (start, end) line range to focus on
+            line_start: Optional start line (0-based) to focus context
+            line_end: Optional end line (0-based, exclusive) to focus context
             include_history: Include recent tool call history (default: True)
         
         Returns:
@@ -63,8 +65,8 @@ def register_tools(mcp):
                     lines = p.read_text().split('\n')
                     total_lines = len(lines)
                     
-                    if line_range:
-                        start, end = line_range
+                    if line_start is not None:
+                        start, end = line_start, (line_end if line_end is not None else line_start + 40)
                         start = max(0, start)
                         end = min(total_lines, end)
                         selected = lines[start:end]
@@ -122,7 +124,7 @@ Format your fix so it can be directly used."""
 {result}
 
 ---
-💡 Based on analysis of {'recent tool history + ' if include_history else ''}{f'file {file_path}' if file_path else 'provided context'} """
+💡 Based on analysis of {'recent tool history + ' if include_history else ''}{f'file {file_path}' if file_path else 'provided context'}"""
             
         except Exception as e:
             return f"[Debug assist error: {e}]"

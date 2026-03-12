@@ -4,13 +4,14 @@ File operation tools for TermPipe MCP Server.
 
 from pathlib import Path
 from typing import Optional
+from termpipe_mcp.tools.surgical.reviewer import pre_commit_gate
 
 
 def register_tools(mcp):
     """Register file tools with the MCP server."""
     
     @mcp.tool()
-    def read_file(path: str, offset: Optional[int] = None, length: Optional[int] = None) -> str:
+    def read_file(path: str, offset: Optional[float] = None, length: Optional[float] = None) -> str:
         """
         Read contents of a file. Supports partial reads.
         
@@ -20,18 +21,22 @@ def register_tools(mcp):
             length: Max lines to read
         """
         try:
+            # Coerce float→int: some MCP clients send JSON numbers as floats
+            offset_i: Optional[int] = int(offset) if offset is not None else None
+            length_i: Optional[int] = int(length) if length is not None else None
+
             p = Path(path).expanduser()
             if not p.exists():
                 return f"[Error: File not found: {path}]"
             
             content = p.read_text()
             
-            if offset is not None:
+            if offset_i is not None:
                 lines = content.split("\n")
-                if offset < 0:
-                    offset = max(0, len(lines) + offset)
-                end = len(lines) if length is None else offset + length
-                content = "\n".join(lines[offset:end])
+                if offset_i < 0:
+                    offset_i = max(0, len(lines) + offset_i)
+                end = len(lines) if length_i is None else offset_i + length_i
+                content = "\n".join(lines[offset_i:end])
             
             if len(content) > 50000:
                 content = content[:50000] + f"\n\n[... truncated, {len(content)} total chars]"

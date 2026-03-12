@@ -36,7 +36,9 @@ from termpipe_mcp.tools import (
     thread,
     system,
     debug,
-    gemini_debug
+    gemini_debug,
+    web_search,
+    gtt
 )
 
 # Register all tools
@@ -52,8 +54,14 @@ thread.register_tools(mcp)
 system.register_tools(mcp)
 debug.register_tools(mcp)
 gemini_debug.register_tools(mcp)
+web_search.register_tools(mcp)
+gtt.register_tools(mcp)
 
 print("🚀 TermPipe MCP Server initialized", file=sys.stderr)
+
+# Bootstrap provider detection (first-run probe, then load from settings)
+from termpipe_mcp.bootstrap import maybe_bootstrap
+maybe_bootstrap()
 
 # Run the server
 if __name__ == "__main__":

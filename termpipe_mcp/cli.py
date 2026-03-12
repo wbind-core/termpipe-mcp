@@ -7,8 +7,19 @@ import argparse
 from pathlib import Path
 
 
-def setup_command():
+def setup_command(reset: bool = False):
     """Interactive setup wizard"""
+    from termpipe_mcp.first_run import run as first_run
+    from termpipe_mcp.bootstrap import maybe_bootstrap
+
+    if reset:
+        from termpipe_mcp.settings import set as settings_set
+        settings_set("is_first_run", True)
+        print("🔄 Reset complete. Re-running provider detection...")
+
+    # Run cross-platform first-run setup (idempotent — skips if already done)
+    first_run(auto=False)
+    maybe_bootstrap()
     from termpipe_mcp.config import config
     
     print("🚀 TermPipe MCP Setup")
@@ -111,7 +122,8 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
     
     # Setup command
-    subparsers.add_parser("setup", help="Configure API credentials")
+    setup_parser = subparsers.add_parser("setup", help="Configure API credentials")
+    setup_parser.add_argument("--reset", action="store_true", help="Force re-probe provider detection")
     
     # Server command
     subparsers.add_parser("server", help="Start the FastAPI server")
@@ -126,7 +138,7 @@ def main():
         sys.exit(1)
     
     if args.command == "setup":
-        setup_command()
+        setup_command(reset=getattr(args, "reset", False))
     elif args.command == "server":
         server_command()
     elif args.command == "status":

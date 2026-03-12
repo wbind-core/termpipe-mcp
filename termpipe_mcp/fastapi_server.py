@@ -5,6 +5,8 @@ TermPipe FastAPI Server - Minimal backend for MCP command execution and NLP.
 import asyncio
 import subprocess
 import time
+import os
+import shlex
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -141,10 +143,14 @@ async def execute_command(request: CommandRequest):
             # Other commands (ls, pwd, cat, etc.)
             cmd = f"{request.command} {' '.join(request.args)}"
         
+        # Wrap command in interactive shell to support aliases/functions
+        shell = os.environ.get("SHELL", "/bin/bash")
+        wrapped_cmd = f"{shell} -i -c {shlex.quote(cmd)}"
+        
         # Execute with timeout
         timeout = request.timeout or 60
         proc = await asyncio.create_subprocess_shell(
-            cmd,
+            wrapped_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
@@ -247,8 +253,12 @@ Rules:
         
         # Execute if requested
         if request.execute:
+            # Wrap command in interactive shell
+            shell = os.environ.get("SHELL", "/bin/bash")
+            wrapped_cmd = f"{shell} -i -c {shlex.quote(command)}"
+            
             proc = await asyncio.create_subprocess_shell(
-                command,
+                wrapped_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )

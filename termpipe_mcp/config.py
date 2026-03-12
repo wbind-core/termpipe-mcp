@@ -4,6 +4,7 @@ Configuration management for TermPipe MCP Server.
 
 import json
 from pathlib import Path
+from termpipe_mcp.helpers import get_config_dir
 from typing import Optional, Dict, Any
 
 
@@ -11,7 +12,7 @@ class Config:
     """Manages TermPipe MCP configuration"""
     
     def __init__(self):
-        self.config_dir = Path.home() / ".termpipe-mcp"
+        self.config_dir = get_config_dir()
         self.config_file = self.config_dir / "config.json"
         self.log_file = self.config_dir / "server.log"
         self._config: Optional[Dict[str, Any]] = None

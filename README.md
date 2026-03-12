@@ -1,57 +1,107 @@
-# TermPipe MCP
+# TermPipe MCP Server
 
-**System automation tools for AI assistants. Saves you money with surgical file editing.**
+MCP server for Claude Desktop providing surgical file editing, shell execution, AI debugging, and more.
 
-## Install
+---
 
-**macOS / Linux:**
-```bash
-curl -sSL https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.sh | bash
+## Architecture
+
+```
+/home/craig/termpipe-mcp/          ← CANONICAL SOURCE (edit here)
+  termpipe_mcp/
+    server.py                      ← FastMCP entry point (stdio)
+    tools/
+      surgical.py                  ← Line-level file editing
+      system.py                    ← list_tools, reload_tools, etc.
+      files.py                     ← read/write/list
+      termf.py                     ← Shell execution
+      debug.py                     ← iFlow debug assist
+      gemini_debug.py              ← Gemini debug assist
+      ... (all tool modules)
+
+~/.termpipe/mcp_server/tools/      ← SYMLINK → termpipe_mcp/tools/
 ```
 
-**Windows:**
-```powershell
-iwr -useb https://raw.githubusercontent.com/wbind-core/termpipe-mcp/master/quick-install.ps1 | iex
+**`~/.termpipe/mcp_server/tools/` is a symlink** to `termpipe_mcp/tools/`.  
+Edit files in either location — they are the same files.
+
+---
+
+## How Claude Desktop Runs It
+
+From `~/.config/Claude/claude_desktop_config.json`:
+
+```json
+"termpipe": {
+  "command": "/home/craig/.local/share/pipx/venvs/termpipe-mcp/bin/python",
+  "args": ["-m", "termpipe_mcp.server"],
+  "env": { "TERMCP_URL": "http://localhost:8421" }
+}
 ```
 
-Done. Everything auto-configures. No setup required.
+The pipx venv is installed in **editable mode** pointing to `/home/craig/termpipe-mcp/`.  
+Edits to `.py` files take effect on next restart — **no reinstall needed**.
 
 ---
 
-## What You Get
+## Applying Changes
 
-**Saves Money:** Surgical editing tools modify single lines instead of rewriting entire files. 90% fewer tokens = lower API costs.
+### Option A — Restart Claude Desktop
+Kills and respawns the stdio server process. Always picks up changes.
 
-**AI Debugging:** When Claude gets stuck, it calls smarter models (iFlow/Gemini) to get unstuck. No more retry loops burning your context.
+### Option B — Hot Reload (no restart)
+Ask Claude to call `reload_tools()`. It will:
+1. `importlib.reload()` every tool module
+2. Clear FastMCP's tool registry
+3. Re-register all tools in-place
 
-**System Access:** Terminal commands, file operations, process management, smart search, app launching - all the tools AI actually needs.
-
-**Zero Config:** One command installs and configures everything. Works with Claude Desktop, Claude Code, iFlow CLI, Gemini CLI.
-
----
-
-## Example: Why Surgical Editing Matters
-
-**Traditional approach (wastes tokens):**
-- Read entire 1000-line file → 1000 tokens
-- Modify in context → more tokens  
-- Write entire file back → 1000 tokens
-- **Total: 2000+ tokens to change one line**
-
-**TermPipe approach (saves money):**
-- Change one line → 10 tokens
-- **200x token reduction**
-
-This adds up fast. Real savings on real usage.
+Useful for mid-session edits. Note: changes to `server.py` itself still require a full restart.
 
 ---
 
-## Troubleshooting
+## Adding a New Tool
 
-Server won't start? → `lsof -i :8421`  
-Tools not appearing? → Restart your MCP client  
-Still broken? → [File an issue](https://github.com/wbind-core/termpipe-mcp/issues)
+1. Open the relevant module in `termpipe_mcp/tools/` (or create a new one)
+2. Add your `@mcp.tool()` function inside `register_tools(mcp):`
+3. If new module: import and call `register_tools(mcp)` in `server.py`
+4. Call `reload_tools()` or restart Claude Desktop
 
-## Contributing
+`list_tools()` is **dynamic** — it introspects the live FastMCP registry, so new tools appear automatically without editing any manifest.
 
-MIT License. PRs welcome.
+---
+
+## Tool Categories
+
+| Category  | Module          | Description                        |
+|-----------|-----------------|------------------------------------|
+| SURGICAL  | surgical.py     | Line-level file editing            |
+| FILE      | files.py        | Read/write/list/move               |
+| TERMF     | termf.py        | Shell command execution            |
+| DEBUG     | debug.py        | iFlow AI debug assist              |
+| GEMINI    | gemini_debug.py | Gemini AI debug/analyze            |
+| PROCESS   | process.py      | Session/process management         |
+| IFLOW     | iflow.py        | iFlow AI backend                   |
+| SYSTEM    | system.py       | list_tools, reload_tools, config   |
+| SEARCH    | search.py       | File content search                |
+| APPS      | apps.py         | App launcher                       |
+| WBIND     | wbind.py        | Wayland GUI automation             |
+| THREAD    | thread.py       | Thread coordination log            |
+| WEB_SEARCH| web_search.py   | Web search                         |
+
+---
+
+## Key Surgical Tool Behaviors (v2.3)
+
+- **Line delta feedback**: Every mutating tool (`replace_lines`, `insert_lines`, `delete_lines`, etc.) returns `📊 File: N → M lines (delta: ±X)` so models track shifted line numbers across sequential edits.
+- **`smart_replace`**: Operates on full file content — supports multi-line `old_text` spans.
+- **`replace_at_line`**: Multi-occurrence lines — replaces first by default, pass `replace_all=True` for all.
+- **`list_tools`**: Dynamic — reads live FastMCP registry, never stale.
+- **`reload_tools`**: Hot-reload all modules in-place without restarting Claude Desktop.
+
+---
+
+## FastAPI Backend
+
+The FastAPI backend (`termf server` / `termcp server`) runs separately on port 8421.  
+The MCP server connects to it via `TERMCP_URL=http://localhost:8421`.  
+Check status: `termcp status`

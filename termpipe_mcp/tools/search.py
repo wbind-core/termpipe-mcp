@@ -2,13 +2,32 @@
 Search tools for TermPipe MCP Server.
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-# Active searches storage
+_HAS_RG = shutil.which("rg") is not None
+
+# Active searches storage — max 50 entries, 1-hour TTL
 _active_searches = {}
+_SEARCH_TTL_SECS = 3600
+_SEARCH_MAX = 50
+
+
+def _evict_searches():
+    """Remove expired and excess searches."""
+    import time
+    now = time.time()
+    expired = [k for k, v in _active_searches.items()
+               if now - v.get("created_at", now) > _SEARCH_TTL_SECS]
+    for k in expired:
+        del _active_searches[k]
+    # Trim to max if still over
+    while len(_active_searches) >= _SEARCH_MAX:
+        oldest = min(_active_searches, key=lambda k: _active_searches[k].get("created_at", 0))
+        del _active_searches[oldest]
 
 
 def register_tools(mcp):
@@ -56,25 +75,36 @@ def register_tools(mcp):
                     find_cmd, shell=True, capture_output=True, text=True, timeout=15
                 )
                 files = [f for f in result.stdout.strip().split("\n") if f and pattern in f]
+                import time
+                _evict_searches()
                 _active_searches[search_id] = {
                     "type": "files",
                     "pattern": pattern,
                     "results": [{"file": f} for f in files[:maxResults]],
-                    "path": path
+                    "path": path,
+                    "created_at": time.time(),
                 }
             else:
-                # Content search using ripgrep if available
-                rg_cmd = ["rg", "--color=never"]
-                if ignoreCase:
-                    rg_cmd.append("-i")
-                if contextLines > 0:
-                    rg_cmd.extend(["-A", str(contextLines), "-B", str(contextLines)])
-                if filePattern:
-                    rg_cmd.extend(["-g", filePattern])
-                rg_cmd.extend(["-e", pattern, path])
-                
+                # Content search: prefer ripgrep, fall back to grep
+                if _HAS_RG:
+                    cmd = ["rg", "--color=never"]
+                    if ignoreCase:
+                        cmd.append("-i")
+                    if contextLines > 0:
+                        cmd.extend(["-A", str(contextLines), "-B", str(contextLines)])
+                    if filePattern:
+                        cmd.extend(["-g", filePattern])
+                    cmd.extend(["-e", pattern, path])
+                else:
+                    cmd = ["grep", "-r", "--include=" + (filePattern or "*")]
+                    if ignoreCase:
+                        cmd.append("-i")
+                    if contextLines > 0:
+                        cmd.extend([f"-A{contextLines}", f"-B{contextLines}"])
+                    cmd.extend([pattern, path])
+
                 result = subprocess.run(
-                    rg_cmd, capture_output=True, text=True, timeout=timeout_ms/1000
+                    cmd, capture_output=True, text=True, timeout=timeout_ms/1000
                 )
                 lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
                 results = []
@@ -86,7 +116,8 @@ def register_tools(mcp):
                     "type": "content",
                     "pattern": pattern,
                     "results": results[:maxResults],
-                    "path": path
+                    "path": path,
+                    "created_at": time.time(),
                 }
             
             count = len(_active_searches[search_id]["results"])
@@ -94,9 +125,7 @@ def register_tools(mcp):
             
         except subprocess.TimeoutExpired:
             return f"[Error: Search timed out after {timeout_ms}ms]"
-        except FileNotFoundError:
-            # ripgrep not installed, use grep fallback
-            return f"[Error: ripgrep (rg) not installed. Install with: sudo apt install ripgrep]"
+
         except Exception as e:
             return f"[Error: {str(e)}]"
 

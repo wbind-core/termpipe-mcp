@@ -14,6 +14,9 @@ def register_tools(mcp):
     def wbind_action(actions: str) -> str:
         """
         Execute WBind GUI automation actions.
+
+        NOTE: On Wayland, prefer gtt_type() and gtt_key() for compositor-native
+        input injection. wbind_action remains available for legacy/X11 use cases.
         
         Actions are comma-separated. Examples:
         - "mouseto 0.5 0.5,, click left" - Move to center, click

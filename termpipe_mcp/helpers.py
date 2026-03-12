@@ -11,7 +11,19 @@ from typing import Dict, Any, Optional, Tuple
 
 # Constants
 HOME = Path.home()
-TERMPIPE_MCP_DIR = HOME / ".termpipe-mcp"
+
+def get_config_dir() -> Path:
+    import platform
+    system = platform.system()
+    if system == "Windows":
+        base = Path(os.environ.get("APPDATA", HOME))
+    elif system == "Darwin":
+        base = HOME / "Library" / "Application Support"
+    else:
+        base = HOME
+    return base / "termpipe-mcp"
+
+TERMPIPE_MCP_DIR = get_config_dir()
 THREAD_FILE = HOME / "claude-antig" / "thread.md"
 CONFIG_FILE = TERMPIPE_MCP_DIR / "config.json"
 

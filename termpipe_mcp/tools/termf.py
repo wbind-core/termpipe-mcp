@@ -22,7 +22,7 @@ def register_tools(mcp):
             run_in_bg: Run in background and return PID
         """
         timeout = timeout_ms / 1000.0 if timeout_ms else 30.0
-        
+
         if run_in_bg:
             try:
                 proc = subprocess.Popen(
@@ -43,7 +43,7 @@ def register_tools(mcp):
             "command": "exec",
             "args": [],
             "raw_command": command  # Pass full command string, preserving heredocs
-        })
+        }, timeout=timeout)
         
         exit_code = result.get("exit_code", 0)
         duration = result.get("duration", 0.0)

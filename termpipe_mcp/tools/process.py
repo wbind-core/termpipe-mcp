@@ -112,7 +112,7 @@ def register_tools(mcp):
                     output = stdout.read()
                     if output:
                         process_manager.set_blocked(pid, False)
-                        return f"📤 Output:\n{output.decode() if isinstance(output, bytes) else output}"
+                        return f"📤 Output:\n{output.decode('utf-8', errors='replace') if isinstance(output, bytes) else output}"
                 except BlockingIOError:
                     pass
                 
