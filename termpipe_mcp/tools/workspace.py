@@ -59,6 +59,18 @@ ATYPE_PLAN  = "ARTIFACT_TYPE_IMPLEMENTATION_PLAN"
 ATYPE_WALK  = "ARTIFACT_TYPE_WALKTHROUGH"
 ATYPE_OTHER = "ARTIFACT_TYPE_OTHER"
 
+# Review-gate bus topics
+_TOPIC_REVIEW_REQUEST = "termpipe.workspace.review_request"
+_TOPIC_FEEDBACK       = "termpipe.workspace.feedback"
+_TOPIC_APPROVED       = "termpipe.workspace.approved"
+_TOPIC_REJECTED       = "termpipe.workspace.rejected"
+
+# Plan status constants
+PLAN_DRAFT            = "draft"
+PLAN_PENDING_APPROVAL = "pending_approval"
+PLAN_APPROVED         = "approved"
+PLAN_REJECTED         = "rejected"
+
 _ATYPE_TO_TOPIC = {
     ATYPE_TASK: _TOPIC_TASK,
     ATYPE_PLAN: _TOPIC_PLAN,
@@ -100,6 +112,65 @@ def _bus_get(topic: str) -> str | None:
     r = _bus_send("get", topic, "")
     if r and r.get("ok") and r.get("data"):
         return r["data"]
+    return None
+
+
+def _bus_poll(topics: list[str], timeout_ms: int = 180000) -> tuple[str, str] | None:
+    """
+    Block until any of the given topics receives a new message.
+    Returns (topic, data) or None on timeout.
+    Uses sequential polling with short waits — avoids needing multi-socket select.
+    """
+    import time
+    # Snapshot current seq for each topic so we only catch NEW messages
+    seqs: dict[str, int] = {}
+    for t in topics:
+        try:
+            msg = json.dumps({"op": "get", "topic": t}) + "\n"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(2.0)
+                s.connect(str(_KC_SOCK))
+                s.sendall(msg.encode())
+                buf = b""
+                while True:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    if b"\n" in buf:
+                        break
+            r = json.loads(buf.split(b"\n")[0])
+            seqs[t] = r.get("seq", 0) if r.get("ok") else 0
+        except Exception:
+            seqs[t] = 0
+
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    poll_interval = 0.5  # seconds between checks
+
+    while time.monotonic() < deadline:
+        for t in topics:
+            try:
+                after = seqs.get(t, 0)
+                msg = json.dumps({"op": "poll", "topic": t,
+                                  "after_seq": after, "timeout_ms": 500}) + "\n"
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(3.0)
+                    s.connect(str(_KC_SOCK))
+                    s.sendall(msg.encode())
+                    buf = b""
+                    while True:
+                        chunk = s.recv(65536)
+                        if not chunk:
+                            break
+                        buf += chunk
+                        if b"\n" in buf:
+                            break
+                r = json.loads(buf.split(b"\n")[0])
+                if r.get("ok") and r.get("data") and r.get("seq", 0) > after:
+                    return (t, r["data"])
+            except Exception:
+                pass
+        time.sleep(poll_interval)
     return None
 
 
@@ -259,6 +330,40 @@ def _write_metadata(
         "version": str(version),
     }
     (d / f"{name}.metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Plan status helpers
+# ---------------------------------------------------------------------------
+
+def _get_plan_status(ws_id: str) -> str:
+    """Read current plan status from DB artifact summary field."""
+    row = _db_read_artifact(ws_id, "implementation_plan.md")
+    if not row:
+        return PLAN_DRAFT
+    # status stored as JSON in summary: {"text": "...", "plan_status": "..."}
+    try:
+        meta = json.loads(row["summary"] or "{}")
+        return meta.get("plan_status", PLAN_DRAFT)
+    except Exception:
+        return PLAN_DRAFT
+
+
+def _pack_summary(text: str | None, plan_status: str) -> str:
+    return json.dumps({"text": text or "", "plan_status": plan_status})
+
+
+def _unpack_summary(raw: str | None) -> tuple[str, str]:
+    """Returns (human_text, plan_status)."""
+    if not raw:
+        return ("", PLAN_DRAFT)
+    try:
+        d = json.loads(raw)
+        if isinstance(d, dict):
+            return (d.get("text", ""), d.get("plan_status", PLAN_DRAFT))
+    except Exception:
+        pass
+    return (raw, PLAN_DRAFT)
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +632,7 @@ def register_tools(mcp):
         cwd: str,
         content: str,
         summary: Optional[str] = None,
+        status: str = PLAN_DRAFT,
     ) -> str:
         """
         Replace implementation_plan.md for the active workspace.
@@ -534,22 +640,38 @@ def register_tools(mcp):
         Bumps version, writes .resolved.N snapshot, publishes to
         termpipe.workspace.plan on the bus.
 
+        After writing the plan, call workspace_request_review() to enter the
+        HITL gate — do NOT proceed to execution without an APPROVED response
+        from workspace_await_approval().
+
         Args:
             cwd:     Project directory.
             content: Full markdown content for the implementation plan.
             summary: Optional one-line summary stored in metadata.
+            status:  Plan lifecycle state: draft | pending_approval | approved | rejected
+                     Defaults to 'draft'. Set by workspace_request_review automatically.
         """
         ws_id = _registry_ws_id(cwd)
         if not ws_id:
             return f"[workspace_plan_update] No workspace for {cwd}"
 
         project_name = Path(cwd).name
+        packed = _pack_summary(summary, status)
         r = _upsert_artifact(ws_id, project_name, ATYPE_PLAN,
-                             "implementation_plan.md", content, summary=summary)
-        return (
-            f"implementation_plan.md updated  v{r['version']}  "
-            f"bus={'✓' if r['bus_ok'] else '✗'}  {r['file_path']}"
+                             "implementation_plan.md", content, summary=packed)
+        bus_flag = '✓' if r['bus_ok'] else '✗'
+        base_msg = (
+            f"implementation_plan.md updated  v{r['version']}  status={status}  "
+            f"bus={bus_flag}  {r['file_path']}"
         )
+        if status == PLAN_DRAFT:
+            return (
+                base_msg
+                + f"\n\n⚠️  Plan is in status='{status}'. "
+                  f"Call workspace_request_review(cwd) "
+                  f"then workspace_await_approval(cwd) before proceeding to execution."
+            )
+        return base_msg
 
     @mcp.tool()
     def workspace_walkthrough_update(
@@ -617,6 +739,196 @@ def register_tools(mcp):
         )
 
     @mcp.tool()
+    def workspace_request_review(
+        cwd: str,
+        message: Optional[str] = None,
+    ) -> str:
+        """
+        Submit implementation_plan.md for human review — sets status to
+        pending_approval, publishes to termpipe.workspace.review_request,
+        and instructs the model to call workspace_await_approval() next.
+
+        This is the PLANNING → HITL gate. Do NOT write any code or call any
+        file-editing tools until workspace_await_approval() returns APPROVED.
+
+        Args:
+            cwd:     Project directory.
+            message: Optional note to the reviewer (e.g. confidence level,
+                     specific areas to focus on).
+        """
+        ws_id = _registry_ws_id(cwd)
+        if not ws_id:
+            return f"[workspace_request_review] No workspace for {cwd}"
+
+        project_name = Path(cwd).name
+        row = _db_read_artifact(ws_id, "implementation_plan.md")
+        if not row:
+            return (
+                "[workspace_request_review] No implementation_plan.md found. "
+                "Call workspace_plan_update(cwd, content) first."
+            )
+
+        plan_content = row["content"]
+        _, old_status = _unpack_summary(row.get("summary"))
+
+        # Bump status to pending_approval in DB + bus
+        packed = _pack_summary(message, PLAN_PENDING_APPROVAL)
+        _upsert_artifact(ws_id, project_name, ATYPE_PLAN,
+                         "implementation_plan.md", plan_content, summary=packed)
+
+        # Publish review request to bus
+        payload = json.dumps({
+            "ws_id": ws_id,
+            "project": project_name,
+            "message": message or "",
+            "plan_path": str(_ARTIFACTS_ROOT / project_name / "implementation_plan.md"),
+            "plan_content": plan_content,
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+        })
+        _bus_pub(_TOPIC_REVIEW_REQUEST, payload, mime="application/json")
+
+        art_path = _ARTIFACTS_ROOT / project_name / "implementation_plan.md"
+        return (
+            f"📋 Review requested for implementation_plan.md\n"
+            f"   project : {project_name}\n"
+            f"   file    : {art_path}\n"
+            f"   status  : pending_approval\n"
+            f"   bus     : {_TOPIC_REVIEW_REQUEST}\n"
+            + (f"   note    : {message}\n" if message else "")
+            + f"\n"
+            f"Waiting for human review. To respond from the terminal:\n"
+            f"  Approve  : kc-bus pub {_TOPIC_APPROVED} \"lgtm\"\n"
+            f"  Feedback : kc-bus pub {_TOPIC_FEEDBACK} \"<your comments>\"\n"
+            f"  Reject   : kc-bus pub {_TOPIC_REJECTED} \"<reason>\"\n"
+            f"  Or run   : workspace-review  (interactive CLI)\n"
+            f"\n"
+            f"➡️  Now call workspace_await_approval(cwd=\"{cwd}\") to block until response."
+        )
+
+    @mcp.tool()
+    def workspace_await_approval(
+        cwd: str,
+        timeout_ms: int = 180000,
+    ) -> str:
+        """
+        Block until the human approves, sends feedback, or rejects the plan.
+
+        This is the hard HITL gate. The tool suspends execution and waits for
+        a human to publish to one of:
+          termpipe.workspace.approved  → returns APPROVED — proceed to execution
+          termpipe.workspace.feedback  → returns FEEDBACK: <text> — revise plan,
+                                         call workspace_plan_update + workspace_request_review,
+                                         then workspace_await_approval again
+          termpipe.workspace.rejected  → returns REJECTED: <reason> — start over
+
+        DO NOT proceed to execution unless this tool returns a string starting
+        with "APPROVED". On FEEDBACK or REJECTED, you must stay in PLANNING mode.
+
+        Args:
+            cwd:        Project directory.
+            timeout_ms: Max wait in milliseconds (default 3 minutes).
+                        On timeout the review request is republished and the
+                        model must re-call this tool or prompt the user.
+        """
+        ws_id = _registry_ws_id(cwd)
+        if not ws_id:
+            return f"[workspace_await_approval] No workspace for {cwd}"
+
+        project_name = Path(cwd).name
+
+        # Verify plan is actually pending
+        current_status = _get_plan_status(ws_id)
+        if current_status == PLAN_APPROVED:
+            return (
+                f"APPROVED (already approved — status was {PLAN_APPROVED})\n"
+                f"Proceed to execution."
+            )
+        if current_status not in (PLAN_PENDING_APPROVAL, PLAN_DRAFT):
+            return (
+                f"[workspace_await_approval] Plan status is \'{current_status}\'. "
+                f"Call workspace_request_review(cwd) first."
+            )
+
+        # Block on bus
+        result = _bus_poll(
+            [_TOPIC_APPROVED, _TOPIC_FEEDBACK, _TOPIC_REJECTED],
+            timeout_ms=timeout_ms,
+        )
+
+        if result is None:
+            # Timeout — republish review request
+            row = _db_read_artifact(ws_id, "implementation_plan.md")
+            plan_content = row["content"] if row else ""
+            payload = json.dumps({
+                "ws_id": ws_id,
+                "project": project_name,
+                "message": "Re-requesting review after timeout",
+                "plan_path": str(_ARTIFACTS_ROOT / project_name / "implementation_plan.md"),
+                "plan_content": plan_content,
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+            })
+            _bus_pub(_TOPIC_REVIEW_REQUEST, payload, mime="application/json")
+            return (
+                f"TIMEOUT — no response after {timeout_ms // 1000}s.\n"
+                f"Review request republished to {_TOPIC_REVIEW_REQUEST}.\n"
+                f"Please prompt the user to review the plan, then call "
+                f"workspace_await_approval(cwd) again.\n"
+                f"  File: {_ARTIFACTS_ROOT / project_name / 'implementation_plan.md'}"
+            )
+
+        topic, data = result
+
+        if topic == _TOPIC_APPROVED:
+            # Persist approved status
+            row = _db_read_artifact(ws_id, "implementation_plan.md")
+            plan_content = row["content"] if row else ""
+            packed = _pack_summary(f"Approved: {data}", PLAN_APPROVED)
+            _upsert_artifact(ws_id, project_name, ATYPE_PLAN,
+                             "implementation_plan.md", plan_content, summary=packed)
+            return (
+                f"APPROVED ✅\n"
+                f"Human message: {data}\n"
+                f"Plan status set to \'approved\'. Proceed to EXECUTION."
+            )
+
+        elif topic == _TOPIC_FEEDBACK:
+            # Persist feedback in summary, keep pending status
+            row = _db_read_artifact(ws_id, "implementation_plan.md")
+            plan_content = row["content"] if row else ""
+            packed = _pack_summary(f"Feedback: {data}", PLAN_PENDING_APPROVAL)
+            _upsert_artifact(ws_id, project_name, ATYPE_PLAN,
+                             "implementation_plan.md", plan_content, summary=packed)
+            return (
+                f"FEEDBACK received — revise the plan before proceeding.\n"
+                f"\n"
+                f"Human feedback:\n{data}\n"
+                f"\n"
+                f"Required steps:\n"
+                f"  1. Revise implementation_plan.md incorporating the feedback\n"
+                f"  2. Call workspace_plan_update(cwd, revised_content)\n"
+                f"  3. Call workspace_request_review(cwd)\n"
+                f"  4. Call workspace_await_approval(cwd)\n"
+                f"Do NOT proceed to execution until you receive APPROVED."
+            )
+
+        elif topic == _TOPIC_REJECTED:
+            row = _db_read_artifact(ws_id, "implementation_plan.md")
+            plan_content = row["content"] if row else ""
+            packed = _pack_summary(f"Rejected: {data}", PLAN_REJECTED)
+            _upsert_artifact(ws_id, project_name, ATYPE_PLAN,
+                             "implementation_plan.md", plan_content, summary=packed)
+            return (
+                f"REJECTED — plan has been rejected. Return to PLANNING mode.\n"
+                f"\n"
+                f"Reason: {data}\n"
+                f"\n"
+                f"Start over: revise the approach, call workspace_plan_update,\n"
+                f"workspace_request_review, then workspace_await_approval."
+            )
+
+        return f"[workspace_await_approval] Unexpected topic: {topic}"
+
+    @mcp.tool()
     def workspace_status(cwd: str) -> str:
         """
         Show current artifact state for a workspace — DB version + bus status.
@@ -631,8 +943,31 @@ def register_tools(mcp):
         project_name = Path(cwd).name
         artifacts = _db_list_artifacts(ws_id)
 
+        plan_status = _get_plan_status(ws_id)
+        status_icon = {
+            PLAN_DRAFT:            "📝 draft",
+            PLAN_PENDING_APPROVAL: "⏳ PENDING APPROVAL — awaiting human review",
+            PLAN_APPROVED:         "✅ APPROVED — execution unlocked",
+            PLAN_REJECTED:         "❌ REJECTED — return to planning",
+        }.get(plan_status, plan_status)
+
         out = f"Workspace: {project_name}  (ws_{ws_id})\n"
         out += f"Artifacts dir: {_ARTIFACTS_ROOT / project_name}\n"
+        out += f"Plan status  : {status_icon}\n"
+        if plan_status == PLAN_PENDING_APPROVAL:
+            out += (
+                f"\n  ⚠️  BLOCKED — do not proceed to execution.\n"
+                f"     Human must respond on the bus:\n"
+                f"       Approve  : kc-bus pub {_TOPIC_APPROVED} \"lgtm\"\n"
+                f"       Feedback : kc-bus pub {_TOPIC_FEEDBACK} \"<comments>\"\n"
+                f"       Reject   : kc-bus pub {_TOPIC_REJECTED} \"<reason>\"\n"
+                f"       Or run   : workspace-review\n"
+            )
+        elif plan_status == PLAN_DRAFT:
+            out += (
+                f"\n  ℹ️  Plan not yet submitted for review.\n"
+                f"     Call workspace_request_review(cwd) when plan is ready.\n"
+            )
         out += "=" * 60 + "\n\n"
 
         if not artifacts:
@@ -653,11 +988,17 @@ def register_tools(mcp):
                 )
                 bus_live = "✓" if _bus_get(topic) else "✗ (not on bus)"
 
+                # Unpack summary for display
+                human_summary, art_status = _unpack_summary(art.get("summary"))
+                display_summary = human_summary or "—"
+                if art["artifact_type"] == ATYPE_PLAN:
+                    display_summary = f"[{art_status}] {human_summary}" if human_summary else f"[{art_status}]"
+
                 out += (
                     f"📄 {art['name']}  [{art['artifact_type']}]\n"
                     f"   version : {art['version']}\n"
                     f"   updated : {art['updated_at']}\n"
-                    f"   summary : {art['summary'] or '—'}\n"
+                    f"   summary : {display_summary}\n"
                     f"   bus     : {topic}  {bus_live}\n"
                     f"   preview :\n    {preview}\n\n"
                 )
