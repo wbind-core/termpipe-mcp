@@ -10,7 +10,7 @@ import sys
 from termpipe_mcp.settings import load_settings, save_settings
 from termpipe_mcp.tools.surgical.reviewer import (
     register_reviewer,
-    _register_cliproxy,
+    _register_omniproxy,
     _register_iflow,
     _register_gemini_cli,
 )
@@ -40,7 +40,7 @@ def _probe_and_select(settings: dict) -> tuple:
     """Probe all four tiers. Return (backend_name, model_name) for first winner."""
     import httpx, shutil
 
-    cliproxy_url = settings.get("cliproxy_url", "http://127.0.0.1:7599")
+    cliproxy_url = settings.get("cliproxy_url", "http://127.0.0.1:8743")
     iflow_url    = settings.get("iflow_url",    "http://127.0.0.1:8421")
 
     def probe(url):
@@ -50,7 +50,7 @@ def _probe_and_select(settings: dict) -> tuple:
             return False
 
     if probe(cliproxy_url):
-        return "cliproxy", "auto"
+        return "omniproxy", "qwen3-coder-plus"
 
     if probe(iflow_url):
         return "iflow", "qwen3-coder-plus"
@@ -66,9 +66,10 @@ def _register_from_settings(settings: dict):
     backend = settings.get("reviewer_backend")
     model   = settings.get("reviewer_model")
 
-    if backend == "cliproxy":
-        _register_cliproxy(url=settings.get("cliproxy_url", "http://127.0.0.1:7599"),
-                           model=model or "auto")
+    # "omniproxy" and legacy "cliproxy" both map to the omniproxy agentic reviewer
+    if backend in ("omniproxy", "cliproxy"):
+        url = settings.get("omniproxy_url") or settings.get("cliproxy_url", "http://127.0.0.1:8743")
+        _register_omniproxy(url=url, model=model or "qwen3-coder-plus")
     elif backend == "iflow":
         _register_iflow(model=model or "qwen3-coder-plus")
     elif backend == "gemini-cli":

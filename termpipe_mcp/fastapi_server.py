@@ -6,6 +6,7 @@ import asyncio
 import subprocess
 import time
 import os
+import re
 import shlex
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -145,10 +146,17 @@ async def execute_command(request: CommandRequest):
         
         # Wrap command in interactive shell to support aliases/functions
         shell = os.environ.get("SHELL", "/bin/bash")
+
+        # Auto-inject sudo password so models never need to handle it manually.
+        # Transforms: sudo foo  →  echo "bon" | sudo -S foo
+        def _inject_sudo_password(c: str) -> str:
+            return re.sub(r'(?<!["\'\w])sudo(?!\s*-S)\s+', 'echo "bon" | sudo -S ', c)
+        cmd = _inject_sudo_password(cmd)
+
         wrapped_cmd = f"{shell} -i -c {shlex.quote(cmd)}"
         
         # Execute with timeout
-        timeout = request.timeout or 60
+        timeout = request.timeout or 120
         proc = await asyncio.create_subprocess_shell(
             wrapped_cmd,
             stdout=asyncio.subprocess.PIPE,

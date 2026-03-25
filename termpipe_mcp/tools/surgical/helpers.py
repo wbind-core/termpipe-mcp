@@ -10,6 +10,30 @@ import difflib
 import os
 import tempfile
 
+OMNIPROXY_URL = os.environ.get("OMNIPROXY_URL", "http://127.0.0.1:8743")
+
+
+def omniproxy_query(prompt: str, model: str = "qwen3-coder-plus",
+                    max_tokens: int = 500, temperature: float = 0.2,
+                    timeout: int = 30) -> str:
+    """Send a completion request through omniproxy. Never calls iflow directly."""
+    import httpx
+    try:
+        resp = httpx.post(
+            f"{OMNIPROXY_URL}/v1/chat/completions",
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"[Error: {e}]"
+
 
 # ---------------------------------------------------------------------------
 # File I/O
@@ -108,7 +132,6 @@ def line_delta_summary(old_count: int, new_count: int, edit_start: int) -> str:
 
 def ai_analyze_error(error_type: str, context: dict) -> str:
     try:
-        from termpipe_mcp.tools.iflow import iflow_query
         prompt = f"Code editing error analyst. Error: {error_type}\n"
         if error_type == "text_not_found":
             prompt += (f"Searched for:\n{context.get('searched_for', '')}\n"
@@ -120,52 +143,10 @@ def ai_analyze_error(error_type: str, context: dict) -> str:
                        f"Lines: {context.get('match_lines', [])}. "
                        f"Text: {context.get('searched_for', '')[:100]}\n")
         prompt += "\nRespond:\n❌ PROBLEM: [one sentence]\n✅ FIX: [one sentence]"
-        return iflow_query(prompt, model="qwen3-coder-plus", max_tokens=150, temperature=0.1)
+        return omniproxy_query(prompt, model="qwen3-coder-plus", max_tokens=150, temperature=0.1)
     except Exception:
         return ""
 
-
-# ---------------------------------------------------------------------------
-# Post-write iflow review — the crown jewel
-# ---------------------------------------------------------------------------
-
-_REVIEW_PROMPT = """\
-You are a surgical post-write duplicate-detection agent.
-
-An automated edit tool just modified this file:
-  FILE: {abs_path}
-  EDITED LINES: {ctx_start} – {ctx_end} (0-based, with {ctx} lines of context each side)
-
-Open the file, read it, and inspect that region carefully.
-
-YOUR ONLY JOB: detect and eliminate duplicate blocks introduced by the edit.
-Duplicates can be:
-  - Exact repeated lines or blocks (consecutive or nearby)
-  - A function / class / section that now appears twice in the file
-  - Repeated import statements
-  - Any block semantically identical to another nearby block
-
-RULES:
-  1. If you find duplicates → edit the file directly to remove them. \
-Then reply with a brief one-line summary of what you removed.
-  2. If the region is clean → reply with exactly: CLEAN
-  3. Do NOT refactor, fix bugs, or change anything except true duplicates.
-  4. Preserve indentation and surrounding code exactly.
-"""
-
-REVIEW_CONTEXT_LINES = 10   # lines of context each side of edit region
-
-
-def post_write_review(path: str, edit_start: int, edit_end: int) -> str:
-    """
-    Ask iflow to open the file directly, inspect the edited region,
-    and fix any duplicates it finds. Non-fatal — silently skips if
-    iflow is unavailable.
-    """
-    try:
-        from termpipe_mcp.tools.iflow import iflow_query
-    except ImportError:
-        return ""
 
     try:
         abs_path  = str(Path(path).expanduser().resolve())
@@ -181,19 +162,16 @@ def post_write_review(path: str, edit_start: int, edit_end: int) -> str:
             ctx=REVIEW_CONTEXT_LINES,
         )
 
-        response = iflow_query(
+        response = _agentic_review(
             prompt,
             model="qwen3-coder-plus",
-            max_tokens=400,
-            temperature=0.0,
-            timeout=3.0,  # non-blocking: don't stall writes if iflow is slow
+            timeout=25,
         ).strip()
 
         if not response or response.upper() == "CLEAN":
             return ""
 
-        # iflow edited the file itself — just report what it did
         return f"\n🤖 iflow post-write review: {response}"
 
     except Exception as e:
-        return f"\n⚠️  iflow post-write review error (non-fatal): {e}"
+        return f"\n⚠️  post-write review error (non-fatal): {e}"

@@ -44,7 +44,7 @@ def register_tools(mcp):
             }
             
             # Make the API request
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
             
             if response.status_code != 200:
                 return f"[Error: Exa AI API request failed with status {response.status_code}: {response.text}]"

@@ -110,8 +110,8 @@ def _auto_detect_backend():
         maybe_bootstrap()
     except Exception:
         # Fallback: inline probe if bootstrap unavailable
-        if _probe_http("http://127.0.0.1:7599/health"):
-            _register_cliproxy()
+        if _probe_http("http://127.0.0.1:8743/health"):
+            _register_omniproxy()
             return
         if _probe_http("http://127.0.0.1:8421/health"):
             _register_iflow()
@@ -121,33 +121,194 @@ def _auto_detect_backend():
             return
 
 
-def _register_cliproxy(url: str = "http://127.0.0.1:7599", model: str = "auto"):
-    """Register CLIProxyAPI as the reviewer backend."""
-    import httpx
-
-    def _fn(prompt: str, timeout: float) -> str:
-        resp = httpx.post(
-            f"{url}/v1/chat/completions",
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 600,
-                "temperature": 0.0,
+def _reviewer_tool_defs() -> list:
+    """Minimal tool set given to the reviewer model."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read the contents of a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "offset": {"type": "integer", "description": "Start line (0-based)"},
+                        "length": {"type": "integer", "description": "Max lines to read"},
+                    },
+                    "required": ["path"],
+                },
             },
-            timeout=timeout,
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "find_in_file",
+                "description": "Search for a pattern in a file and return matching lines with context.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "pattern": {"type": "string"},
+                        "max_matches": {"type": "integer", "default": 20},
+                        "context": {"type": "integer", "default": 2},
+                    },
+                    "required": ["path", "pattern"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_lines",
+                "description": "Read a specific line range from a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "start_line": {"type": "integer"},
+                        "end_line": {"type": "integer"},
+                    },
+                    "required": ["path", "start_line"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "smart_replace",
+                "description": "Replace a unique string in a file with new text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "old_text": {"type": "string"},
+                        "new_text": {"type": "string"},
+                    },
+                    "required": ["path", "old_text", "new_text"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": "Write content to a file, replacing it entirely.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                },
+            },
+        },
+    ]
+
+
+def _call_termcp(tool_name: str, args: dict) -> str:
+    """Execute a tool via OmniProxy Tool Server (port 8422, per-category endpoints)."""
+    import httpx, json, os
+
+    _ROUTE: dict[str, str] = {
+        "read_file":    "/tools/files",
+        "write_file":   "/tools/files",
+        "find_in_file": "/tools/files",
+        "read_lines":   "/tools/files",
+        "smart_replace": "/tools/files",
+    }
+    TOOL_SERVER = os.environ.get("OMNIPROXY_TOOL_SERVER_URL", "http://localhost:8422")
+    endpoint = _ROUTE.get(tool_name, f"/tools/files")  # reviewer only uses file tools
+    try:
+        resp = httpx.post(
+            f"{TOOL_SERVER}{endpoint}",
+            json={"tool": tool_name, "args": args},
+            timeout=30,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        if data.get("error"):
+            return f"[Tool error: {data['error']}]"
+        return data.get("result", "")
+    except Exception as e:
+        return f"[Tool server error: {e}]"
 
-    register_reviewer("cliproxy", _fn)
+
+def _agentic_review(prompt: str, model: str, timeout: float,
+                    omniproxy_url: str = "http://127.0.0.1:8743") -> str:
+    """
+    Run an agentic loop against omniproxy with TermPipe tools attached.
+    The model can read and write files to fix issues it finds.
+    Returns the final text response.
+    """
+    import httpx, json
+
+    tool_defs = _reviewer_tool_defs()
+    messages = [{"role": "user", "content": prompt}]
+    MAX_TURNS = 8
+    deadline = timeout  # per-request timeout, not wall-clock total
+
+    client = httpx.Client(timeout=deadline)
+    try:
+        for _ in range(MAX_TURNS):
+            resp = client.post(
+                f"{omniproxy_url}/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "tools": tool_defs,
+                    "tool_choice": "auto",
+                    "max_tokens": 800,
+                    "temperature": 0.0,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            choice = data["choices"][0]
+            message = choice["message"]
+            finish_reason = choice.get("finish_reason")
+
+            messages.append(message)
+
+            if finish_reason == "tool_calls":
+                for tc in message.get("tool_calls", []):
+                    fn = tc["function"]
+                    try:
+                        args = json.loads(fn["arguments"])
+                    except json.JSONDecodeError:
+                        args = {}
+                    result = _call_termcp(fn["name"], args)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result,
+                    })
+                continue
+
+            # stop / length / other — return the text
+            return (message.get("content") or "").strip()
+
+        return "[reviewer: max turns reached]"
+    finally:
+        client.close()
+
+
+def _register_omniproxy(url: str = "http://127.0.0.1:8743", model: str = "qwen3-coder-plus"):
+    """Register omniproxy agentic reviewer (tools-capable)."""
+
+    def _fn(prompt: str, timeout: float) -> str:
+        return _agentic_review(prompt, model=model, timeout=timeout, omniproxy_url=url)
+
+    register_reviewer("omniproxy", _fn)
 
 
 def _register_iflow(model: str = "qwen3-coder-plus"):
-    """Register iflow direct as the reviewer backend."""
-    from termpipe_mcp.tools.iflow import iflow_query
+    """Fallback: omniproxy text-only review (no agentic tool loop)."""
+    from termpipe_mcp.tools.surgical.helpers import omniproxy_query
 
     def _fn(prompt: str, timeout: float) -> str:
-        return iflow_query(
+        return omniproxy_query(
             prompt,
             model=model,
             max_tokens=600,
@@ -272,43 +433,60 @@ def build_context_block(
 # ---------------------------------------------------------------------------
 
 _REVIEW_PROMPT = """\
-You are a pre-commit code reviewer with write access to the filesystem.
-
+You are the final authority in a two-stage agentic coding system. Your role is pre-commit validation with surgical correction authority.
 FILE: {path}
 LANGUAGE: {lang}
-
-PROPOSED CHANGE:
---- REMOVE ---
+--- PROPOSED CHANGE ---
+REMOVED LINES:
 {old_text}
---- INSERT ---
+ADDED LINES:
 {new_text}
 --- END ---
-
-SURROUNDING CONTEXT (annotated, EDIT START/END markers show the changed region):
-```
+SURROUNDING CONTEXT (EDIT START/EDIT END mark the changed region):
 {context_block}
-```
 
-YOUR TASK:
-Inspect the proposed change for these issues (ranked by severity):
-  1. Syntax errors in the inserted block
-  2. Duplicate code — the block (or something semantically equivalent) already
-     exists in the surrounding context or elsewhere in the file
-  3. Import problems — missing import for a symbol used in new_text, or a
-     duplicate import being introduced
-  4. Obvious structural errors — mismatched brackets, wrong indentation level
+YOUR MANDATE:
+You have final write authority. When you write, it's final—no review loop.
+You MUST evaluate the ADDED LINES for:
+1. **Syntax validity** — does the ADDED block, when inserted, create invalid syntax in {lang}?
+   - Check bracket/parenthesis/brace matching across the edit boundary
+   - Check string literals (unclosed quotes, improper escapes)
+   - Check language-specific structures (indentation in Python, semicolons in JS, etc.)
+2. **Exact duplicates** — does the ADDED block contain a line or multi-line block that exists *identically* in the SURROUNDING CONTEXT (excluding the REMOVED LINES)?
+3. **Import/definition duplicates** — does the ADDED block:
+   - Add an import statement for a module already imported in the SURROUNDING CONTEXT?
+   - Add a function/class/variable that shadows a definition in the SURROUNDING CONTEXT at the same scope?
+4. **Structural integrity** — does the ADDED block break:
+   - Indentation consistency with the surrounding code?
+   - Block termination (unclosed blocks, missing braces/end statements)?
+5. **Hidden errors from the REMOVE block** — if the REMOVED LINES contained errors that the ADDED LINES inherit or interact with, flag these.
+DECISION RULES:
+**IF NO ISSUES FOUND** → Reply with exactly:
+APPROVED
+**IF ISSUE(S) FOUND** → You MUST:
+   a. Fix the minimal set of lines required to resolve ALL identified issues
+   b. Use your file tools to write the correction to {path}
+   c. Your correction must modify ONLY the lines introduced by this edit (you may extend correction beyond the exact INSERT lines if the issue spans the edit boundary, but document this)
+   d. After writing, reply with exactly one line:
+      FIXED: {{brief description of what was fixed}}
+**CRITICAL CONSTRAINTS:**
+- You are the authority, not a suggester. If you write, your version stands.
+- Do NOT refactor. Do NOT improve style. Do NOT optimize.
+- Do NOT reject changes for subjective reasons (naming, architecture, preference).
+- Do NOT add functionality beyond fixing concrete errors.
+- If an issue requires more context than provided → FAIL OPEN: write the fix based on available context, annotate with a comment if needed.
+- If you cannot confidently fix (e.g., ambiguous dependency conflict), write a minimal fix that preserves original intent and add a comment: "# FIXME: review needed"
+You operate with surgical precision. Your goal is to let correct edits pass and silently correct unambiguous errors—no negotiation, no back-and-forth.
 
-RULES:
-  - If you find NO issues → reply with exactly the single word: APPROVED
-  - If you find issues → fix them yourself:
-      a. Write the corrected file directly using your available shell/file tools
-         (you have full write access to {path})
-      b. After writing, reply with a brief one-line summary starting with FIXED:
-         e.g. "FIXED: removed duplicate import of os on line 4"
-  - Do NOT refactor, rename, or change anything beyond the identified issue
-  - Do NOT explain at length — one line summary is enough
-  - CRITICAL: if you write the file, your version is final. Do not re-review.
+LANGUAGE-SPECIFIC RULES:
+- Python: check for mixing tabs/spaces in the ADDED block, verify __future__ imports come first
+- JavaScript/TypeScript: check for missing semicolons if they break ASI, verify JSX tag closure
+- Go: verify unused imports are NOT added (Go won't compile), check error handling patterns
 """
+
+
+
+
 
 
 # ---------------------------------------------------------------------------

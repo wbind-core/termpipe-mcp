@@ -21,7 +21,7 @@ def register_tools(mcp):
             timeout_ms: Optional timeout in milliseconds
             run_in_bg: Run in background and return PID
         """
-        timeout = timeout_ms / 1000.0 if timeout_ms else 30.0
+        timeout = timeout_ms / 1000.0 if timeout_ms else 120.0
 
         if run_in_bg:
             try:
@@ -42,8 +42,9 @@ def register_tools(mcp):
         result = api_post("/exec", {
             "command": "exec",
             "args": [],
-            "raw_command": command  # Pass full command string, preserving heredocs
-        }, timeout=timeout)
+            "raw_command": command,  # Pass full command string, preserving heredocs
+            "timeout": int(timeout)  # Pass timeout to server so it enforces it on the subprocess
+        }, timeout=timeout + 5)  # httpx timeout slightly longer than subprocess timeout
         
         exit_code = result.get("exit_code", 0)
         duration = result.get("duration", 0.0)
@@ -54,6 +55,7 @@ def register_tools(mcp):
         status = "Success" if result.get("success") else "Failed"
         response = f"Status: {status} (Exit Code: {exit_code})\\n"
         response += f"Duration: {duration:.4f}s\\n"
+        response += f"Command: {command}\\n"
         
         if output.strip():
             response += f"Output:\\n{output}\\n"

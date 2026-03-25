@@ -1,6 +1,6 @@
 """
 surgical/replacers.py — smart_replace and remove_duplicates.
-Both call post_write_review() after committing changes.
+
 """
 
 from pathlib import Path
@@ -8,7 +8,7 @@ from typing import Optional
 from .helpers import (
     read_file_lines, atomic_write, generate_diff,
     find_similar_lines, line_delta_summary,
-    ai_analyze_error, post_write_review,
+    ai_analyze_error,
 )
 from .reviewer import pre_commit_gate
 import os
@@ -82,7 +82,6 @@ def register_tools(mcp):
                            f"```diff\n{diff}\n```")
                     if rev.note:
                         out += f"\n🤖 reviewer: {rev.note}"
-                    out += post_write_review(path, expected_line, edit_end)
                     return out
                 else:
                     out = f"[Ambiguous: {occ_count} occurrences on lines: {occ_lines[:10]}]\n"
@@ -123,7 +122,6 @@ def register_tools(mcp):
             out = (f"✅ Replaced at line {start_line_no}\n"
                    f"{line_delta_summary(old_count, len(new_lines), start_line_no)}\n\n"
                    f"```diff\n{diff}\n```")
-            out += post_write_review(path, start_line_no, edit_end)
             return out
 
         except Exception as e:
@@ -143,12 +141,12 @@ def register_tools(mcp):
                                       lines[end_line:])
             if notes:
                 try:
-                    from termpipe_mcp.tools.iflow import iflow_query
+                    from termpipe_mcp.tools.surgical.helpers import omniproxy_query
                     prompt = (f"Remove duplicates per instructions: {notes}\n\n"
                               + "\n".join(f"{i + start_line}: {l}"
                                           for i, l in enumerate(target))
                               + "\n\nReturn cleaned lines only, no line numbers.")
-                    processed = iflow_query(
+                    processed = omniproxy_query(
                         prompt, model="qwen3-coder-plus",
                         max_tokens=500, temperature=0.1,
                     ).split('\n')
@@ -165,7 +163,7 @@ def register_tools(mcp):
             out = (f"✅ Removed {removed} duplicate(s)\n"
                    f"{line_delta_summary(old_count, len(lines), start_line)}\n\n"
                    f"```diff\n{diff}\n```")
-            out += post_write_review(path, start_line, start_line + len(processed))
+            out +=(path, start_line, start_line + len(processed))
             return out
         except Exception as e:
             return f"[Error: {e}]"

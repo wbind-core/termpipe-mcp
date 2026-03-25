@@ -16,5 +16,6 @@ from . import (
     debug,
     gemini_debug,
     web_search,
-    gtt
+    gtt,
+    workspace,
 )

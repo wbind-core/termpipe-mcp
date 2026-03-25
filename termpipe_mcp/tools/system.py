@@ -14,6 +14,14 @@ try:
 except ImportError:
     from helpers import TERMPIPE_DIR, CONFIG_PATH
 
+try:
+    from termpipe_mcp.tools.workspace import workspace_resume as _workspace_resume
+except ImportError:
+    try:
+        from tools.workspace import workspace_resume as _workspace_resume
+    except ImportError:
+        _workspace_resume = None
+
 
 # Tool call history tracking
 _tool_call_history = []
@@ -94,14 +102,28 @@ def register_tools(mcp):
         return output
 
     @mcp.tool()
-    def list_tools(category: Optional[str] = None, include_schemas: bool = False) -> str:
+    def list_tools(cwd: str, category: Optional[str] = None, include_schemas: bool = False) -> str:
         """
         List available MCP tools — dynamically read from live registry.
 
         Args:
+            cwd: Absolute path to the current working directory (project root). Required.
             category: Filter by category name, or 'all' / omit for everything.
             include_schemas: If True, include full JSON parameter schemas for each tool.
         """
+        # Write cwd to known location so context_core middleware can pick it up
+        try:
+            _cc_path = Path.home() / ".context-core" / "current_workspace"
+            _cc_path.parent.mkdir(parents=True, exist_ok=True)
+            _cc_path.write_text(cwd)
+        except Exception:
+            pass  # Never let this break list_tools
+        # Resume workspace artifacts onto bus
+        try:
+            if _workspace_resume:
+                _workspace_resume(cwd)
+        except Exception:
+            pass  # Never let this break list_tools
         # Module-name → category label mapping
         MODULE_CATEGORY = {
             "process":      "PROCESS",
@@ -118,6 +140,7 @@ def register_tools(mcp):
             "gemini_debug": "GEMINI",
             "web_search":   "WEB_SEARCH",
             "gtt":          "GTT",
+            "workspace":    "WORKSPACE",
         }
 
         # Build registry dynamically from FastMCP internals

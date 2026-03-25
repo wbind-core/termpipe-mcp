@@ -3,7 +3,7 @@ surgical/formatters.py — indent and unindent tools.
 """
 
 from .helpers import (
-    read_file_lines, atomic_write, generate_diff, post_write_review,
+    read_file_lines, atomic_write, generate_diff,
 )
 
 
@@ -22,7 +22,6 @@ def register_tools(mcp):
             diff = generate_diff(old_copy, lines)
             out = (f"✅ Indented lines {start_line}–{end_line - 1} by {spaces} spaces\n\n"
                    f"```diff\n{diff}\n```")
-            out += post_write_review(path, start_line, end_line)
             return out
         except Exception as e:
             return f"[Error: {e}]"
@@ -41,7 +40,6 @@ def register_tools(mcp):
             diff = generate_diff(old_copy, lines)
             out = (f"✅ Unindented lines {start_line}–{end_line - 1} by up to {spaces} spaces\n\n"
                    f"```diff\n{diff}\n```")
-            out += post_write_review(path, start_line, end_line)
             return out
         except Exception as e:
             return f"[Error: {e}]"

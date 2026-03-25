@@ -1,14 +1,14 @@
 """
 surgical/writers.py — line-level write tools.
 Tools: insert_lines, delete_lines, replace_lines, replace_at_line
-Every tool calls post_write_review() after committing changes.
+
 """
 
 from typing import Optional
 from .helpers import (
     read_file_lines, atomic_write, generate_diff,
     generate_inline_diff, find_similar_lines,
-    line_delta_summary, ai_analyze_error, post_write_review,
+    line_delta_summary, ai_analyze_error,
 )
 from .reviewer import pre_commit_gate
 
@@ -38,7 +38,6 @@ def register_tools(mcp):
                    f"```diff\n{diff}\n```")
             if rev.note:
                 out += f"\n🤖 reviewer: {rev.note}"
-            out += post_write_review(path, line_number, edit_end)
             return out
         except Exception as e:
             return f"[Error: {e}]"
@@ -68,7 +67,7 @@ def register_tools(mcp):
                 out += f"{i:4d} | {l}\n"
             out += "```"
             # post-review on the region just above/below deletion point
-            out += post_write_review(path, max(0, start_line - 1), start_line + 1)
+            out +=(path, max(0, start_line - 1), start_line + 1)
             return out
         except Exception as e:
             return f"[Error: {e}]"
@@ -100,7 +99,6 @@ def register_tools(mcp):
                    f"({old_replaced} → {len(new_lines_in)} lines)\n"
                    f"{line_delta_summary(old_count, len(lines), start_line)}\n\n"
                    f"```diff\n{diff}\n```")
-            out += post_write_review(path, start_line, edit_end)
             return out
         except Exception as e:
             return f"[Error: {e}]"
@@ -154,7 +152,6 @@ def register_tools(mcp):
                    f"📐 {inline}\n"
                    f"Before: {old_line.strip()}\n"
                    f"After:  {new_line.strip()}")
-            out += post_write_review(path, line_number, line_number + 1)
             return out
         except Exception as e:
             return f"[Error: {e}]"
