@@ -105,7 +105,7 @@ def register_tools(mcp):
             for i, l in enumerate(deleted, start_line):
                 out += f"{i:4d} | {l}\n"
             out += "```"
-            out += (path, max(0, start_line - 1), start_line + 1)
+            
             return out
         except Exception as e:
             return f"[Error: {e}]"

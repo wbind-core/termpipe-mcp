@@ -226,11 +226,11 @@ Be concise but specific with line numbers."""
 AVAILABLE TOOLS:
 - find_in_file(path, pattern) → Find text with line numbers
 - read_lines(path, start, end) → Read specific line range
-- replace_at_line(path, line_num, old_text, new_text) → Replace text on one line
-- replace_lines(path, start, end, new_content) → Replace line range
+- patch_line(path, line_num, old_text, new_text) → Substring surgery on one known line
+- overwrite_lines(path, start, end, new_content) → Replace a line range block
 - insert_lines(path, line_num, content) → Insert before a line
 - delete_lines(path, start, end) → Delete line range
-- smart_replace(path, old, new) → Find & replace if unique
+- smart_replace(path, old, new) → Content-addressed replace, no line number needed
 
 FILE ({len(lines)} lines):
 ```
