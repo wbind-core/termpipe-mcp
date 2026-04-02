@@ -23,39 +23,14 @@ from mcp.server.fastmcp import FastMCP
 # Initialize MCP server
 mcp = FastMCP("termpipe")
 
-# Import and register all tool modules
-from termpipe_mcp.tools import (
-    process,
-    termf,
-    iflow,
-    files,
-    surgical,
-    apps,
-    wbind,
-    search,
-    thread,
-    system,
-    debug,
-    gemini_debug,
-    web_search,
-    gtt
-)
+# Dynamically import and register all tool modules.
+# __init__.py is the single source of truth — add/remove/comment modules there.
+import termpipe_mcp.tools as _tools
+import inspect
 
-# Register all tools
-process.register_tools(mcp)
-termf.register_tools(mcp)
-iflow.register_tools(mcp)
-files.register_tools(mcp)
-surgical.register_tools(mcp)
-apps.register_tools(mcp)
-wbind.register_tools(mcp)
-search.register_tools(mcp)
-thread.register_tools(mcp)
-system.register_tools(mcp)
-debug.register_tools(mcp)
-gemini_debug.register_tools(mcp)
-web_search.register_tools(mcp)
-gtt.register_tools(mcp)
+for _name, _mod in inspect.getmembers(_tools, inspect.ismodule):
+    if hasattr(_mod, "register_tools"):
+        _mod.register_tools(mcp)
 
 print("🚀 TermPipe MCP Server initialized", file=sys.stderr)
 
