@@ -441,7 +441,7 @@ def validate_syntax(code: str, language: str) -> bool:
         return False
 
 
-def build_enhanced_prompt(context: ReviewContext) -> str:
+def build_enhanced_prompt(context: ReviewContext, old_text: str = "", new_text: str = "") -> str:
     """Build enhanced prompt with semantic analysis results."""
     base_prompt = f"""
 You are a pre-commit code reviewer with write access to the filesystem.
@@ -451,9 +451,9 @@ LANGUAGE: {context.language}
 
 PROPOSED CHANGE:
 --- REMOVE ---
-{textwrap.indent(context.surrounding_context, "  ")}
+{textwrap.indent(old_text, "  ")}
 --- INSERT ---
-{textwrap.indent(context.surrounding_context, "  ")}
+{textwrap.indent(new_text, "  ")}
 --- END ---
 
 SEMANTIC ANALYSIS RESULTS:
@@ -533,7 +533,7 @@ def enhanced_pre_commit_gate(
     context = build_enhanced_context(path, lines_before, edit_start, edit_end, old_text, new_text)
 
     # Build enhanced prompt
-    prompt = build_enhanced_prompt(context)
+    prompt = build_enhanced_prompt(context, old_text=old_text, new_text=new_text)
 
     # Run review with enhanced context
     _set_reviewing(True)
@@ -550,6 +550,18 @@ def enhanced_pre_commit_gate(
         return ReviewResult(approved=True, reviewer_wrote=False, note="")
 
     if response.upper().startswith("FIXED:") or response.upper().startswith("FIXED "):
+        # Ghost-write verification — same fix as reviewer.py
+        try:
+            current = Path(path).read_text()
+            original = "".join(lines_before)
+            if current.strip() == original.strip():
+                return ReviewResult(
+                    approved=True,
+                    reviewer_wrote=False,
+                    note="[enhanced reviewer ghost-write detected — file unchanged after FIXED claim, proceeding with original write]",
+                )
+        except Exception:
+            pass
         return ReviewResult(approved=False, reviewer_wrote=True, note=response)
 
     return ReviewResult(
