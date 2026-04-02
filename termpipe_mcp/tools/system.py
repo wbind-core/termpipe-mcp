@@ -22,67 +22,6 @@ except ImportError:
     except ImportError:
         _workspace_resume = None
 
-# Context-Core integration — imported lazily so TermPipe works without it
-def _cc_session(directory: str, task: str = "") -> dict:
-    """Call context-core session() if available, return {} on any failure."""
-    try:
-        from context_core import session as cc_session
-        return cc_session(directory=directory, task=task) or {}
-    except Exception:
-        return {}
-
-def _cc_retrieve(query: str, session_id: str = "default") -> list:
-    """Call context-core retrieve_context() if available, return [] on any failure."""
-    try:
-        from context_core import retrieve_context
-        return retrieve_context(query=query, session_id=session_id, sources="stm,ltm", max_results=8) or []
-    except Exception:
-        return []
-
-def _build_context_block(cwd: str, task: str = "") -> str:
-    """
-    Bootstrap a Context-Core session and retrieve LTM, then format
-    a clean WORKSPACE CONTEXT block ready to append to any tool output.
-    Returns an empty string if Context-Core is unavailable or returns nothing useful.
-    """
-    project_name = Path(cwd).name
-    session_data = _cc_session(directory=cwd, task=task)
-    if not session_data:
-        return ""
-
-    lines = []
-    lines.append("")
-    lines.append("=" * 50)
-    lines.append(f"WORKSPACE CONTEXT  •  {session_data.get('display_name', project_name)}  •  Session #{session_data.get('session_num', '?')}")
-    lines.append("=" * 50)
-
-    # Recent session history
-    history = session_data.get("history_summary", [])
-    if history:
-        lines.append("RECENT SESSIONS:")
-        for h in history[:3]:
-            summary = h.get("summary", "(no summary)")
-            if summary and summary != "(no summary)":
-                lines.append(f"  #{h['session']}  {summary[:120]}{'...' if len(summary) > 120 else ''}")
-        lines.append("")
-
-    # LTM key facts
-    ltm_items = _cc_retrieve(query=f"{project_name} architecture tools decisions", session_id=str(session_data.get("workspace_id", "default")))
-    if ltm_items:
-        lines.append("KEY FACTS (from memory):")
-        seen = set()
-        for item in ltm_items:
-            content = item.get("content", "").strip()
-            if content and content not in seen:
-                seen.add(content)
-                snippet = content[:160] + ("..." if len(content) > 160 else "")
-                lines.append(f"  • {snippet}")
-        lines.append("")
-
-    lines.append("=" * 50)
-    return "\n".join(lines)
-
-
 # Tool call history tracking
 _tool_call_history = []
 
@@ -301,30 +240,30 @@ def register_tools(mcp):
             out += "\n"
         out += f"Total: {total} tools\n\n"
         out += "Use list_tools(category='surgical') for a specific category"
-        # Append workspace context block (A/B hybrid: auto-boot on list_tools)
-        context_block = _build_context_block(cwd)
-        if context_block:
-            out += context_block
+        # ── Context-Core trigger ──────────────────────────────────────────────
+        # cwd is the cross-MCP trigger signal. Now that you have the tool list,
+        # call context-core:session(directory="{cwd}") to load project memory:
+        # session history, LTM key facts, and open tasks. This is the handoff.
+        out += f"\n\n▶ NEXT: call context-core:session(directory=\"{cwd}\") to load project memory."
         return out
 
     @mcp.tool()
     def boot(cwd: str, task: str = "") -> str:
         """
-        One-shot session bootstrap — returns full WORKSPACE CONTEXT without the tool list.
+        Mid-session context refresh — emits the context-core trigger directive.
 
-        Use this at the start of a session when you already know the tools and just
-        want the project memory: recent session history, key architectural facts, and
-        open tasks from Context-Core LTM.
+        Use when you already know the tools (skipping list_tools) and just need
+        to load project memory. Writes cwd to the workspace slot and resumes bus
+        artifacts, then tells you exactly what to call next on context-core.
 
-        Equivalent to calling list_tools(cwd=...) and reading only the WORKSPACE
-        CONTEXT block at the bottom — but faster and less noisy.
+        The actual memory (session history, LTM key facts, open tasks) lives in
+        the context-core MCP server — this tool hands off to it via the directive.
 
         Args:
-            cwd:  Absolute path to the project root (same as list_tools).
-            task: Optional description of what you're about to work on.
-                  Used to seed context retrieval for better relevance.
+            cwd:  Absolute path to the project root.
+            task: Optional — what you're about to work on (passed to context-core:session).
         """
-        # Write cwd to known location so context_core middleware can pick it up
+        # Write cwd to known location for context-core middleware
         try:
             _cc_path = Path.home() / ".context-core" / "current_workspace"
             _cc_path.parent.mkdir(parents=True, exist_ok=True)
@@ -338,10 +277,14 @@ def register_tools(mcp):
         except Exception:
             pass
 
-        block = _build_context_block(cwd, task=task)
-        if block:
-            return block.strip()
-        return f"[No Context-Core data found for {cwd}. Run list_tools(cwd=...) first to initialize.]"
+        task_hint = f", task=\"{task}\"" if task else ""
+        return (
+            f"Workspace armed: {cwd}\n"
+            f"\n"
+            f"▶ NOW CALL: context-core:session(directory=\"{cwd}\"{task_hint})\n"
+            f"\n"
+            f"That will load: session history, LTM key facts, and open tasks for this project."
+        )
 
 
     @mcp.tool()
