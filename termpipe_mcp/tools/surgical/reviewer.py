@@ -553,6 +553,22 @@ def pre_commit_gate(
         return ReviewResult(approved=True, reviewer_wrote=False, note="")
 
     if response.upper().startswith("FIXED:") or response.upper().startswith("FIXED "):
+        # Verify the reviewer actually wrote to disk before trusting reviewer_wrote=True.
+        # The ghost-write bug: reviewer reports FIXED but _call_termcp may have silently
+        # failed, leaving the file unmodified. We detect this by comparing the file's
+        # current content against lines_before — if identical, the write never happened.
+        try:
+            current = Path(path).read_text()
+            original = "".join(lines_before)
+            if current.strip() == original.strip():
+                # Reviewer claimed FIXED but file is unchanged — fall through to original write
+                return ReviewResult(
+                    approved=True,
+                    reviewer_wrote=False,
+                    note=f"[reviewer ghost-write detected — file unchanged after FIXED claim, proceeding with original write]",
+                )
+        except Exception:
+            pass  # If we can't read the file, trust the reviewer
         return ReviewResult(approved=False, reviewer_wrote=True, note=response)
 
     # Unexpected response — treat as approved to avoid blocking writes
