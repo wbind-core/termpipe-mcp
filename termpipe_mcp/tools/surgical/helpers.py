@@ -148,30 +148,3 @@ def ai_analyze_error(error_type: str, context: dict) -> str:
         return ""
 
 
-    try:
-        abs_path  = str(Path(path).expanduser().resolve())
-        lines     = read_file_lines(path)
-        total     = len(lines)
-        ctx_start = max(0, edit_start - REVIEW_CONTEXT_LINES)
-        ctx_end   = min(total, edit_end + REVIEW_CONTEXT_LINES)
-
-        prompt = _REVIEW_PROMPT.format(
-            abs_path=abs_path,
-            ctx_start=ctx_start,
-            ctx_end=ctx_end,
-            ctx=REVIEW_CONTEXT_LINES,
-        )
-
-        response = _agentic_review(
-            prompt,
-            model="qwen3-coder-plus",
-            timeout=25,
-        ).strip()
-
-        if not response or response.upper() == "CLEAN":
-            return ""
-
-        return f"\n🤖 iflow post-write review: {response}"
-
-    except Exception as e:
-        return f"\n⚠️  post-write review error (non-fatal): {e}"

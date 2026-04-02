@@ -250,13 +250,12 @@ def register_tools(mcp):
         Re-imports every module in termpipe_mcp/tools/ and re-registers all
         tools in-place. Use this after editing any tool file.
         """
-        from termpipe_mcp.tools import (
-            process, termf, iflow, files, surgical, apps, wbind,
-            search, thread, system, debug, gemini_debug, web_search, gtt,
-        )
+        import inspect
+        import termpipe_mcp.tools as _tools_pkg
+
+        # Dynamically discover modules — respects __init__.py comments
         MODULE_OBJECTS = [
-            process, termf, iflow, files, surgical, apps, wbind,
-            search, thread, system, debug, gemini_debug, web_search, gtt,
+            mod for _, mod in inspect.getmembers(_tools_pkg, inspect.ismodule)
         ]
 
         results = []

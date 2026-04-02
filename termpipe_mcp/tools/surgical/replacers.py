@@ -223,7 +223,6 @@ def register_tools(mcp):
             out = (f"✅ Removed {removed} duplicate(s)\n"
                    f"{line_delta_summary(old_count, len(lines), start_line)}\n\n"
                    f"```diff\n{diff}\n```")
-            out += (path, start_line, start_line + len(processed))
             return out
         except Exception as e:
             return f"[Error: {e}]"
