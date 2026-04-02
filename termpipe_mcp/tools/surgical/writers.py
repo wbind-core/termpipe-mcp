@@ -1,7 +1,30 @@
 """
 surgical/writers.py — line-level write tools.
-Tools: insert_lines, delete_lines, replace_lines, replace_at_line
 
+Tool routing guide
+------------------
+Pick the right tool for the job:
+
+  patch_line(path, line_number, old_text, new_text)
+      → Intra-line substring surgery. You know the exact line number AND
+        the substring to change within it. Most surgical option.
+        Example: fix a typo, change one variable name on a known line.
+
+  overwrite_lines(path, start_line, end_line, content)
+      → Swap out a contiguous block of lines with new content. You know
+        the line range. Good for replacing a whole function body, block, etc.
+        NOTE: end_line is EXCLUSIVE (Python slice semantics: start..end-1).
+
+  insert_lines(path, line_number, content)
+      → Insert new lines BEFORE line_number without removing anything.
+        NOTE: line numbers are 0-based.
+
+  delete_lines(path, start_line, end_line)
+      → Remove lines start_line..end_line-1.
+        NOTE: end_line is EXCLUSIVE.
+
+When you don't know the exact line number, prefer smart_replace (replacers.py)
+which is content-addressed and idempotent.
 """
 
 from typing import Optional
@@ -17,7 +40,15 @@ def register_tools(mcp):
 
     @mcp.tool()
     def insert_lines(path: str, line_number: int, content: str) -> str:
-        """Insert lines BEFORE line_number (0-based)."""
+        """
+        Insert lines BEFORE line_number (0-based).
+
+        Args:
+            path:        File to edit.
+            line_number: 0-based index. New lines appear BEFORE this line.
+                         Use 0 to prepend; use len(file) to append.
+            content:     Text to insert. Use '\\n' to insert multiple lines.
+        """
         try:
             lines = read_file_lines(path)
             old_count = len(lines)
@@ -44,7 +75,15 @@ def register_tools(mcp):
 
     @mcp.tool()
     def delete_lines(path: str, start_line: int, end_line: int) -> str:
-        """Delete lines start_line..end_line-1 (0-based, end exclusive)."""
+        """
+        Delete lines start_line..end_line-1 (0-based, end exclusive).
+
+        Args:
+            path:       File to edit.
+            start_line: 0-based index of first line to delete (inclusive).
+            end_line:   0-based index — deletion stops BEFORE this line (exclusive).
+                        Like Python slicing: delete_lines(f, 5, 8) removes lines 5, 6, 7.
+        """
         try:
             lines = read_file_lines(path)
             old_count = len(lines)
@@ -56,25 +95,40 @@ def register_tools(mcp):
             rev = pre_commit_gate(path, lines, start_line, end_line, old_text_del, "")
             if rev.reviewer_wrote:
                 note = f"\n🤖 reviewer: {rev.note}" if rev.note else ""
-                out = f"✅ Deleted {len(deleted)} line(s) ({start_line}–{end_line - 1}) (reviewer corrected){note}"
+                out = f"✅ Deleted {len(deleted)} line(s) ({start_line}\u2013{end_line - 1}) (reviewer corrected){note}"
                 return out
             lines = new_lines_del
             atomic_write(path, lines)
-            out = f"✅ Deleted {len(deleted)} line(s) ({start_line}–{end_line - 1})\n"
+            out = f"✅ Deleted {len(deleted)} line(s) ({start_line}\u2013{end_line - 1})\n"
             out += line_delta_summary(old_count, len(lines), start_line) + "\n\n"
             out += "🗑️ Deleted:\n```\n"
             for i, l in enumerate(deleted, start_line):
                 out += f"{i:4d} | {l}\n"
             out += "```"
-            # post-review on the region just above/below deletion point
-            out +=(path, max(0, start_line - 1), start_line + 1)
+            out += (path, max(0, start_line - 1), start_line + 1)
             return out
         except Exception as e:
             return f"[Error: {e}]"
 
     @mcp.tool()
-    def replace_lines(path: str, start_line: int, end_line: int, content: str) -> str:
-        """Replace lines start_line..end_line-1 with content."""
+    def overwrite_lines(path: str, start_line: int, end_line: int, content: str) -> str:
+        """
+        Replace a contiguous block of lines with new content (formerly replace_lines).
+
+        Use this when you know the exact line range to swap out — e.g. replacing a
+        function body, a config block, or any multi-line region.
+
+        Prefer smart_replace when you don't know exact line numbers (it's content-
+        addressed and idempotent). Prefer patch_line for intra-line substring edits.
+
+        Args:
+            path:       File to edit.
+            start_line: 0-based index of first line to replace (inclusive).
+            end_line:   0-based index — replacement stops BEFORE this line (exclusive).
+                        Like Python slicing: overwrite_lines(f, 5, 8, ...) replaces lines 5, 6, 7.
+            content:    Replacement text. Use '\\n' for multiple lines.
+                        Can expand or contract the block (different line count is fine).
+        """
         try:
             lines = read_file_lines(path)
             old_count = len(lines)
@@ -89,14 +143,14 @@ def register_tools(mcp):
             rev = pre_commit_gate(path, old_copy, start_line, end_line, old_block, content)
             if rev.reviewer_wrote:
                 note = f"\n🤖 reviewer: {rev.note}" if rev.note else ""
-                return (f"✅ Replaced lines {start_line}–{end_line - 1} "
-                        f"({old_replaced} → {len(new_lines_in)} lines) (reviewer corrected){note}")
+                return (f"✅ Replaced lines {start_line}\u2013{end_line - 1} "
+                        f"({old_replaced} \u2192 {len(new_lines_in)} lines) (reviewer corrected){note}")
             lines = lines[:start_line] + new_lines_in + lines[end_line:]
             atomic_write(path, lines)
             edit_end = start_line + len(new_lines_in)
             diff = generate_diff(old_copy, lines)
-            out = (f"✅ Replaced lines {start_line}–{end_line - 1} "
-                   f"({old_replaced} → {len(new_lines_in)} lines)\n"
+            out = (f"✅ Replaced lines {start_line}\u2013{end_line - 1} "
+                   f"({old_replaced} \u2192 {len(new_lines_in)} lines)\n"
                    f"{line_delta_summary(old_count, len(lines), start_line)}\n\n"
                    f"```diff\n{diff}\n```")
             return out
@@ -104,10 +158,29 @@ def register_tools(mcp):
             return f"[Error: {e}]"
 
     @mcp.tool()
-    def replace_at_line(path: str, line_number: int,
-                        old_text: str, new_text: str,
-                        replace_all: bool = False) -> str:
-        """Replace text within a specific line (0-based). Most surgical tool."""
+    def patch_line(path: str, line_number: int,
+                   old_text: str, new_text: str,
+                   replace_all: bool = False) -> str:
+        """
+        Replace a substring within a single known line (formerly replace_at_line).
+
+        The most surgical writer tool — touches exactly one line and only the
+        matching substring within it. Requires knowing the line number.
+
+        Prefer smart_replace when you don't know the line number (it searches
+        the whole file). Prefer overwrite_lines to swap out a multi-line block.
+
+        Args:
+            path:        File to edit.
+            line_number: 0-based line index.
+            old_text:    Substring to find within that line.
+            new_text:    Replacement substring.
+            replace_all: If True, replace all occurrences on the line.
+                         Default (False) replaces only the first occurrence.
+
+        Errors: If old_text is not found on line_number, returns diagnostics
+        including similar nearby lines and AI analysis to help locate the right target.
+        """
         try:
             lines = read_file_lines(path)
             if line_number < 0 or line_number >= len(lines):

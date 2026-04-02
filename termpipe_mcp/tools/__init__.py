@@ -16,6 +16,6 @@ from . import (
     debug,
     gemini_debug,
     web_search,
-    gtt,
+    # gtt,       # disabled: GTT toolkit not yet fully deployed — re-enable by uncommenting
     workspace,
 )
