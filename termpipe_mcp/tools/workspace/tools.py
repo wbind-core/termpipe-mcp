@@ -1,480 +1,33 @@
 """
-Workspace Artifact Tools for TermPipe MCP Server.
-
-Implements Antigravity-style persistent markdown artifacts (task, implementation
-plan, walkthrough, and arbitrary "other" docs) with two-layer durability:
-
-  Layer 1 — kc-bus (volatile, live):
-      termpipe.workspace.active      published by list_tools on session start
-      termpipe.workspace.task        current task.md content
-      termpipe.workspace.plan        current implementation_plan.md content
-      termpipe.workspace.walkthrough current walkthrough.md content
-      termpipe.workspace.<name>      any ARTIFACT_TYPE_OTHER doc
-
-  Layer 2 — per-workspace SQLite (durable, versioned):
-      ~/.context-core/workspaces/ws_<id>/workspace.db  ← artifacts table
-      ~/Documents/TermPipe/Workspaces/<project>/        ← human-readable files
-        task.md, task.md.resolved.0, task.md.resolved.1 …
-        implementation_plan.md, implementation_plan.md.resolved.N …
-        walkthrough.md, walkthrough.md.resolved.N …
-
-Integration with context_core:
-  - list_tools writes ~/.context-core/current_workspace (already done in system.py)
-  - workspace_resume(cwd) is called by list_tools to republish live artifacts
-    to the bus so every session gets current state for free, zero extra calls
-  - Workspace ID is looked up from context_core's registry.db by project path
+MCP tool registration — all workspace_* tools.
 """
-
-from __future__ import annotations
-
+import sqlite3
 import json
 import os
-import re
-import socket
-import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Optional
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
-_HOME          = Path.home()
-_CC_DIR        = _HOME / ".context-core"
-_CC_REGISTRY   = _CC_DIR / "registry.db"
-_CC_WORKSPACES = _CC_DIR / "workspaces"
-_ARTIFACTS_ROOT = _HOME / "Documents" / "TermPipe" / "Workspaces"
-_KC_SOCK       = Path(f"/run/user/{os.getuid()}/kernclip-bus.sock")
-
-# Bus topic namespace
-_TOPIC_ACTIVE      = "termpipe.workspace.active"
-_TOPIC_TASK        = "termpipe.workspace.task"
-_TOPIC_PLAN        = "termpipe.workspace.plan"
-_TOPIC_WALKTHROUGH = "termpipe.workspace.walkthrough"
-
-# Artifact type constants (mirrors Antigravity metadata)
-ATYPE_TASK  = "ARTIFACT_TYPE_TASK"
-ATYPE_PLAN  = "ARTIFACT_TYPE_IMPLEMENTATION_PLAN"
-ATYPE_WALK  = "ARTIFACT_TYPE_WALKTHROUGH"
-ATYPE_OTHER = "ARTIFACT_TYPE_OTHER"
-
-# Review-gate bus topics
-_TOPIC_REVIEW_REQUEST = "termpipe.workspace.review_request"
-_TOPIC_FEEDBACK       = "termpipe.workspace.feedback"
-_TOPIC_APPROVED       = "termpipe.workspace.approved"
-_TOPIC_REJECTED       = "termpipe.workspace.rejected"
-
-# Plan status constants
-PLAN_DRAFT            = "draft"
-PLAN_PENDING_APPROVAL = "pending_approval"
-PLAN_APPROVED         = "approved"
-PLAN_REJECTED         = "rejected"
-
-_ATYPE_TO_TOPIC = {
-    ATYPE_TASK: _TOPIC_TASK,
-    ATYPE_PLAN: _TOPIC_PLAN,
-    ATYPE_WALK: _TOPIC_WALKTHROUGH,
-}
-
-# ---------------------------------------------------------------------------
-# kc-bus low-level (no SDK dependency — raw socket)
-# ---------------------------------------------------------------------------
-
-def _bus_send(op: str, topic: str, data: str, mime: str = "text/plain") -> dict | None:
-    if not _KC_SOCK.exists():
-        return None
-    try:
-        msg = json.dumps({"op": op, "topic": topic, "mime": mime, "data": data}) + "\n"
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(2.0)
-            s.connect(str(_KC_SOCK))
-            s.sendall(msg.encode())
-            buf = b""
-            while True:
-                chunk = s.recv(65536)
-                if not chunk:
-                    break
-                buf += chunk
-                if b"\n" in buf:
-                    break
-        return json.loads(buf.split(b"\n")[0])
-    except Exception:
-        return None
-
-
-def _bus_pub(topic: str, data: str, mime: str = "text/plain") -> bool:
-    r = _bus_send("pub", topic, data, mime)
-    return bool(r and r.get("ok"))
-
-
-def _bus_get(topic: str) -> str | None:
-    r = _bus_send("get", topic, "")
-    if r and r.get("ok") and r.get("data"):
-        return r["data"]
-    return None
-
-
-def _bus_poll(topics: list[str], timeout_ms: int = 180000) -> tuple[str, str] | None:
-    """
-    Block until any of the given topics receives a new message.
-    Returns (topic, data) or None on timeout.
-    Uses sequential polling with short waits — avoids needing multi-socket select.
-    """
-    import time
-    # Snapshot current seq for each topic so we only catch NEW messages
-    seqs: dict[str, int] = {}
-    for t in topics:
-        try:
-            msg = json.dumps({"op": "get", "topic": t}) + "\n"
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                s.settimeout(2.0)
-                s.connect(str(_KC_SOCK))
-                s.sendall(msg.encode())
-                buf = b""
-                while True:
-                    chunk = s.recv(65536)
-                    if not chunk:
-                        break
-                    buf += chunk
-                    if b"\n" in buf:
-                        break
-            r = json.loads(buf.split(b"\n")[0])
-            seqs[t] = r.get("seq", 0) if r.get("ok") else 0
-        except Exception:
-            seqs[t] = 0
-
-    deadline = time.monotonic() + timeout_ms / 1000.0
-    poll_interval = 0.5  # seconds between checks
-
-    while time.monotonic() < deadline:
-        for t in topics:
-            try:
-                after = seqs.get(t, 0)
-                msg = json.dumps({"op": "poll", "topic": t,
-                                  "after_seq": after, "timeout_ms": 500}) + "\n"
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                    s.settimeout(3.0)
-                    s.connect(str(_KC_SOCK))
-                    s.sendall(msg.encode())
-                    buf = b""
-                    while True:
-                        chunk = s.recv(65536)
-                        if not chunk:
-                            break
-                        buf += chunk
-                        if b"\n" in buf:
-                            break
-                r = json.loads(buf.split(b"\n")[0])
-                if r.get("ok") and r.get("data") and r.get("seq", 0) > after:
-                    return (t, r["data"])
-            except Exception:
-                pass
-        time.sleep(poll_interval)
-    return None
-
-
-# ---------------------------------------------------------------------------
-# context_core registry helpers
-# ---------------------------------------------------------------------------
-
-def _registry_ws_id(project_path: str) -> str | None:
-    """Look up workspace_id for a project path from context_core registry."""
-    if not _CC_REGISTRY.exists():
-        return None
-    try:
-        conn = sqlite3.connect(str(_CC_REGISTRY))
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT workspace_id FROM workspace_folders WHERE folder_path = ?",
-            (str(Path(project_path).resolve()),)
-        ).fetchone()
-        conn.close()
-        return row["workspace_id"] if row else None
-    except Exception:
-        return None
-
-
-def _registry_all_workspaces() -> list[dict]:
-    if not _CC_REGISTRY.exists():
-        return []
-    try:
-        conn = sqlite3.connect(str(_CC_REGISTRY))
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT workspace_id, display_name, last_accessed FROM workspaces "
-            "ORDER BY last_accessed DESC"
-        ).fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-    except Exception:
-        return []
-
-
-def _ws_db_path(ws_id: str) -> Path:
-    return _CC_WORKSPACES / f"ws_{ws_id}" / "workspace.db"
-
-
-# ---------------------------------------------------------------------------
-# Per-workspace DB — artifacts table
-# ---------------------------------------------------------------------------
-
-def _ensure_artifacts_table(conn: sqlite3.Connection) -> None:
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS artifacts (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            artifact_type TEXT NOT NULL,
-            name          TEXT NOT NULL,
-            content       TEXT NOT NULL DEFAULT '',
-            version       INTEGER NOT NULL DEFAULT 0,
-            summary       TEXT,
-            updated_at    TEXT NOT NULL,
-            UNIQUE(name)
-        )
-    """)
-    conn.commit()
-
-
-def _get_ws_conn(ws_id: str) -> sqlite3.Connection | None:
-    db = _ws_db_path(ws_id)
-    if not db.exists():
-        return None
-    conn = sqlite3.connect(str(db))
-    conn.row_factory = sqlite3.Row
-    _ensure_artifacts_table(conn)
-    return conn
-
-
-def _db_read_artifact(ws_id: str, name: str) -> dict | None:
-    conn = _get_ws_conn(ws_id)
-    if not conn:
-        return None
-    row = conn.execute("SELECT * FROM artifacts WHERE name = ?", (name,)).fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-def _db_write_artifact(
-    ws_id: str,
-    artifact_type: str,
-    name: str,
-    content: str,
-    summary: str | None = None,
-) -> int:
-    """Upsert artifact, bump version, return new version number."""
-    conn = _get_ws_conn(ws_id)
-    if not conn:
-        raise RuntimeError(f"No workspace DB for ws_{ws_id}")
-    now = datetime.now(timezone.utc).isoformat()
-    existing = conn.execute(
-        "SELECT version FROM artifacts WHERE name = ?", (name,)
-    ).fetchone()
-    if existing:
-        new_version = existing["version"] + 1
-        conn.execute(
-            "UPDATE artifacts SET content=?, version=?, summary=?, updated_at=? WHERE name=?",
-            (content, new_version, summary, now, name),
-        )
-    else:
-        new_version = 0
-        conn.execute(
-            "INSERT INTO artifacts (artifact_type, name, content, version, summary, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (artifact_type, name, content, new_version, summary, now),
-        )
-    conn.commit()
-    conn.close()
-    return new_version
-
-
-def _db_list_artifacts(ws_id: str) -> list[dict]:
-    conn = _get_ws_conn(ws_id)
-    if not conn:
-        return []
-    rows = conn.execute(
-        "SELECT artifact_type, name, version, summary, updated_at "
-        "FROM artifacts ORDER BY artifact_type"
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-# ---------------------------------------------------------------------------
-# File-layer (human-readable + .resolved.N versioned snapshots)
-# ---------------------------------------------------------------------------
-
-def _artifact_dir(project_name: str) -> Path:
-    d = _ARTIFACTS_ROOT / project_name
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _write_artifact_files(project_name: str, name: str, content: str, version: int) -> Path:
-    d = _artifact_dir(project_name)
-    main = d / name
-    main.write_text(content, encoding="utf-8")
-    snapshot = d / f"{name}.resolved.{version}"
-    snapshot.write_text(content, encoding="utf-8")
-    return main
-
-
-def _write_metadata(
-    project_name: str, name: str, artifact_type: str,
-    summary: str | None, version: int
-) -> None:
-    d = _artifact_dir(project_name)
-    meta = {
-        "artifactType": artifact_type,
-        "summary": summary or "",
-        "updatedAt": datetime.now(timezone.utc).isoformat(),
-        "version": str(version),
-    }
-    (d / f"{name}.metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# Plan status helpers
-# ---------------------------------------------------------------------------
-
-def _get_plan_status(ws_id: str) -> str:
-    """Read current plan status from DB artifact summary field."""
-    row = _db_read_artifact(ws_id, "implementation_plan.md")
-    if not row:
-        return PLAN_DRAFT
-    # status stored as JSON in summary: {"text": "...", "plan_status": "..."}
-    try:
-        meta = json.loads(row["summary"] or "{}")
-        return meta.get("plan_status", PLAN_DRAFT)
-    except Exception:
-        return PLAN_DRAFT
-
-
-def _pack_summary(text: str | None, plan_status: str) -> str:
-    return json.dumps({"text": text or "", "plan_status": plan_status})
-
-
-def _unpack_summary(raw: str | None) -> tuple[str, str]:
-    """Returns (human_text, plan_status)."""
-    if not raw:
-        return ("", PLAN_DRAFT)
-    try:
-        d = json.loads(raw)
-        if isinstance(d, dict):
-            return (d.get("text", ""), d.get("plan_status", PLAN_DRAFT))
-    except Exception:
-        pass
-    return (raw, PLAN_DRAFT)
-
-
-# ---------------------------------------------------------------------------
-# Core upsert — single entry point for all artifact mutations
-# ---------------------------------------------------------------------------
-
-def _upsert_artifact(
-    ws_id: str,
-    project_name: str,
-    artifact_type: str,
-    name: str,
-    content: str,
-    summary: str | None = None,
-) -> dict:
-    """Persist artifact to DB + files + bus. Returns result dict."""
-    version = _db_write_artifact(ws_id, artifact_type, name, content, summary)
-    _write_artifact_files(project_name, name, content, version)
-    _write_metadata(project_name, name, artifact_type, summary, version)
-
-    topic = _ATYPE_TO_TOPIC.get(
-        artifact_type,
-        f"termpipe.workspace.{name.removesuffix('.md')}"
-    )
-    payload = json.dumps({
-        "ws_id": ws_id,
-        "project": project_name,
-        "artifact_type": artifact_type,
-        "name": name,
-        "version": version,
-        "content": content,
-        "summary": summary or "",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    })
-    bus_ok = _bus_pub(topic, payload, mime="application/json")
-
-    return {
-        "version": version,
-        "bus_ok": bus_ok,
-        "file_path": str(_ARTIFACTS_ROOT / project_name / name),
-        "topic": topic,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Session-start resume hook — called by list_tools in system.py
-# ---------------------------------------------------------------------------
-
-def workspace_resume(cwd: str) -> None:
-    """
-    Side-effect of list_tools. Announces active workspace and republishes
-    all current artifacts to their bus topics. Zero-cost if bus is down or
-    workspace is unknown.
-    """
-    ws_id = _registry_ws_id(cwd)
-    if not ws_id:
-        return
-
-    project_name = Path(cwd).name
-
-    _bus_pub(_TOPIC_ACTIVE, json.dumps({
-        "ws_id": ws_id,
-        "project": project_name,
-        "path": cwd,
-        "resumed_at": datetime.now(timezone.utc).isoformat(),
-    }), mime="application/json")
-
-    for art in _db_list_artifacts(ws_id):
-        row = _db_read_artifact(ws_id, art["name"])
-        if not row:
-            continue
-        topic = _ATYPE_TO_TOPIC.get(
-            art["artifact_type"],
-            f"termpipe.workspace.{art['name'].removesuffix('.md')}"
-        )
-        payload = json.dumps({
-            "ws_id": ws_id,
-            "project": project_name,
-            "artifact_type": art["artifact_type"],
-            "name": art["name"],
-            "version": art["version"],
-            "content": row["content"],
-            "summary": art["summary"] or "",
-            "updated_at": art["updated_at"],
-        })
-        _bus_pub(topic, payload, mime="application/json")
-
-
-# ---------------------------------------------------------------------------
-# Task item helpers
-# ---------------------------------------------------------------------------
-
-def _next_task_id(content: str) -> int:
-    ids = re.findall(r"<!--\s*id:\s*(\d+)\s*-->", content)
-    return max((int(i) for i in ids), default=0) + 1
-
-
-def _set_task_status(content: str, item_id: int, status: str) -> tuple[str, bool]:
-    marker = {"done": "[x]", "in_progress": "[/]", "todo": "[ ]"}.get(status, "[ ]")
-    pattern = re.compile(
-        r"(-\s*)\[[x/ ]\](\s*.+?)(<!--\s*id:\s*" + str(item_id) + r"\s*-->)",
-        re.IGNORECASE
-    )
-    new, count = pattern.subn(
-        lambda m: f"{m.group(1)}{marker}{m.group(2)}{m.group(3)}", content
-    )
-    return new, count > 0
-
-
-# ---------------------------------------------------------------------------
-# Tool registration
-# ---------------------------------------------------------------------------
+try:
+    from termpipe_mcp.helpers import TERMPIPE_DIR
+except ImportError:
+    from helpers import TERMPIPE_DIR
+
+from ._bus import (
+    _bus_pub, _bus_poll, _bus_get, _ATYPE_TO_TOPIC, _CC_DIR,
+    _ARTIFACTS_ROOT, _TOPIC_ACTIVE, _TOPIC_REVIEW_REQUEST,
+    _TOPIC_APPROVED, _TOPIC_FEEDBACK, _TOPIC_REJECTED,
+    ATYPE_TASK, ATYPE_PLAN, ATYPE_WALK, ATYPE_OTHER,
+    PLAN_DRAFT, PLAN_PENDING_APPROVAL, PLAN_APPROVED, PLAN_REJECTED
+)
+from ._db import _db_read_artifact, _db_write_artifact, _db_list_artifacts
+from ._files import _artifact_dir, _write_artifact_files, _write_metadata
+from ._registry import _registry_ws_id, _registry_all_workspaces
+from ._task import (
+    _get_plan_status, _pack_summary, _unpack_summary,
+    _next_task_id, _set_task_status,
+)
+from ._artifacts import _upsert_artifact, workspace_resume
 
 def register_tools(mcp):
 
@@ -1006,18 +559,29 @@ def register_tools(mcp):
         return out.rstrip()
 
     @mcp.tool()
-    def workspace_list() -> str:
+    def workspace_list(filter: str = "") -> str:
         """
-        List all workspaces known to context_core with artifact counts.
+        List workspaces known to context_core with artifact counts.
+
+        Args:
+            filter: Optional substring to filter by workspace name (case-insensitive).
+                    Omit or pass "" to list all workspaces.
         """
         workspaces = _registry_all_workspaces()
         if not workspaces:
             return "No workspaces found in context_core registry."
 
+        if filter:
+            workspaces = [ws for ws in workspaces
+                          if filter.lower() in ws["display_name"].lower()]
+            if not workspaces:
+                return f"No workspaces matching '{filter}'."
+
         active_file = _CC_DIR / "current_workspace"
         active = active_file.read_text().strip() if active_file.exists() else None
 
-        out = "Workspaces\n" + "=" * 50 + "\n\n"
+        header = f"Workspaces (filter='{filter}')" if filter else "Workspaces"
+        out = header + "\n" + "=" * 50 + "\n\n"
         for ws in workspaces:
             ws_id = ws["workspace_id"]
             name  = ws["display_name"]
@@ -1031,6 +595,8 @@ def register_tools(mcp):
                 f"    artifacts ({len(arts)}) : {art_str}\n\n"
             )
 
+        total = len(workspaces)
+        out += f"({total} workspace{'s' if total != 1 else ''})"
         return out.rstrip()
 
     @mcp.tool()
@@ -1062,3 +628,4 @@ def register_tools(mcp):
             out += f"  · {art['name']}  →  {topic}\n"
 
         return out
+

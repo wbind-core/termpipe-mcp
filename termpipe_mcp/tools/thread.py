@@ -125,7 +125,7 @@ def register_tools(mcp):
         return f"✅ Logged{bus_note}: {message[:60]}"
 
     @mcp.tool()
-    def thread_read(last_n: int = 20, from_bus: bool = True) -> str:
+    def thread_read(last_n: int = 20, from_bus: bool = True, topic: str = "") -> str:
         """
         Read recent entries from the coordination thread.
 
@@ -135,9 +135,12 @@ def register_tools(mcp):
         Args:
             last_n:    Number of recent entries to return
             from_bus:  Prefer kc-bus store over flat file (default: True)
+            topic:     kc-bus topic to read from (default: conduit.mcp.thread_log).
+                       Use this to filter to a specific topic instead of reading all.
         """
+        read_topic = topic.strip() if topic.strip() else _TOPIC_LOG
         if from_bus:
-            msgs = _kc_get(_TOPIC_LOG)
+            msgs = _kc_get(read_topic)
             if msgs:
                 entries = msgs[-last_n:]
                 lines = []
@@ -150,7 +153,7 @@ def register_tools(mcp):
                         lines.append(f"[{ts}] **{sender}**: {msg}")
                     else:
                         lines.append(str(m))
-                return "\n".join(lines) or "[No bus messages found]"
+                return "\n".join(lines) or f"[No bus messages found on {read_topic}]"
 
-        # Fallback to flat file
+        # Fallback to flat file (topic filter not applicable here)
         return _file_read(last_n)

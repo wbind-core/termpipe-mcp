@@ -3,6 +3,7 @@ Tool modules for TermPipe MCP Server.
 """
 
 from . import (
+    git,
     process,
     termf,
     iflow,

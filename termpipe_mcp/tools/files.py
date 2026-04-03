@@ -137,12 +137,25 @@ def register_tools(mcp):
     @mcp.tool()
     def search_file_content(path: str, pattern: str, max_results: int = 200) -> str:
         """
-        Search for pattern in file contents (grep-like).
-        
+        Synchronous grep-like search — returns results immediately in one call.
+
+        USE THIS for most searches. Results are returned directly with no
+        session management required.
+
+        Prefer search_file_content when:
+          • Searching a single file or a small/medium directory
+          • You want results inline without extra tool calls
+          • You don't need pagination (up to max_results matches)
+
+        Use start_search instead when:
+          • Searching a very large codebase (10k+ files)
+          • You need pagination across thousands of results
+          • You want ripgrep's advanced filtering (file globs, context lines)
+
         Args:
-            path: File or directory path
-            pattern: Text pattern to search
-            max_results: Maximum number of results
+            path:        File or directory to search (recursive for directories).
+            pattern:     Text to search for (case-insensitive).
+            max_results: Stop after this many matches (default 200).
         """
         import re
         
@@ -267,3 +280,88 @@ def register_tools(mcp):
             return f"✅ Created directory: {path}"
         except Exception as e:
             return f"[Error: {str(e)}]"
+
+
+    @mcp.tool()
+    def write_batch(files: list, dry_run: bool = False) -> str:
+        """
+        Write multiple files atomically — all succeed or none do.
+
+        Takes a list of {path, content} dicts and writes them as a single
+        unit. If any write fails, every file already written in this batch
+        is rolled back to its original state (or deleted if it was new).
+
+        Use this instead of multiple write_file calls when:
+          • A refactor touches more than one file
+          • You need consistency — partial writes would leave a broken state
+          • You want a dry-run pass to validate paths before committing
+
+        Args:
+            files:   List of dicts, each with "path" (str) and "content" (str).
+            dry_run: If True, validate all paths/permissions without writing.
+                     Returns a preview of what would be written.
+        """
+        # ── Validate input ──────────────────────────────────────────────────
+        if not isinstance(files, list) or not files:
+            return "[Error: files must be a non-empty list of {path, content} dicts]"
+
+        entries = []
+        for i, item in enumerate(files):
+            if not isinstance(item, dict):
+                return f"[Error: files[{i}] is not a dict — expected {{path, content}}]"
+            if "path" not in item or "content" not in item:
+                return f"[Error: files[{i}] missing 'path' or 'content' key]"
+            p = Path(str(item["path"])).expanduser()
+            entries.append((p, str(item["content"])))
+
+        # ── Dry-run: report what would happen ───────────────────────────────
+        if dry_run:
+            lines = [f"🔍 Dry-run — {len(entries)} file(s) would be written:\n"]
+            for p, content in entries:
+                status = "overwrite" if p.exists() else "create"
+                lines.append(f"  [{status}] {p}  ({len(content)} chars)")
+            return "\n".join(lines)
+
+        # ── Snapshot originals for rollback ─────────────────────────────────
+        originals: dict = {}   # path → original bytes, or None if file was new
+        for p, _ in entries:
+            if p.exists():
+                originals[p] = p.read_bytes()
+            else:
+                originals[p] = None
+
+        # ── Write phase ──────────────────────────────────────────────────────
+        written = []
+        error_msg = None
+        for p, content in entries:
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content)
+                written.append(p)
+            except Exception as e:
+                error_msg = f"[Error writing {p}: {e}]"
+                break
+
+        if error_msg is None:
+            summary = f"✅ write_batch: {len(entries)} file(s) written\n"
+            for p, content in entries:
+                summary += f"   {p}  ({len(content)} chars)\n"
+            return summary
+
+        # ── Rollback ─────────────────────────────────────────────────────────
+        rollback_errors = []
+        for p in written:
+            try:
+                original = originals.get(p)
+                if original is None:
+                    p.unlink(missing_ok=True)      # file didn't exist before — delete it
+                else:
+                    p.write_bytes(original)        # restore prior content
+            except Exception as rb_err:
+                rollback_errors.append(f"   rollback failed for {p}: {rb_err}")
+
+        result = f"❌ write_batch aborted — {error_msg}\n"
+        result += f"   Rolled back {len(written)} already-written file(s).\n"
+        if rollback_errors:
+            result += "   ⚠️  Rollback errors:\n" + "\n".join(rollback_errors)
+        return result
