@@ -61,6 +61,8 @@ def register_tools(mcp):
             if rev.reviewer_wrote:
                 note = f"\n🤖 reviewer: {rev.note}" if rev.note else ""
                 return f"✅ Inserted {len(new_lines_in)} line(s) before line {line_number} (reviewer corrected){note}"
+            if rev.blocked:
+                return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
             atomic_write(path, new_lines_list)
             lines = new_lines_list
             diff = generate_diff(old_copy, lines)
@@ -97,6 +99,8 @@ def register_tools(mcp):
                 note = f"\n🤖 reviewer: {rev.note}" if rev.note else ""
                 out = f"✅ Deleted {len(deleted)} line(s) ({start_line}\u2013{end_line - 1}) (reviewer corrected){note}"
                 return out
+            if rev.blocked:
+                return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
             lines = new_lines_del
             atomic_write(path, lines)
             out = f"✅ Deleted {len(deleted)} line(s) ({start_line}\u2013{end_line - 1})\n"
@@ -105,7 +109,6 @@ def register_tools(mcp):
             for i, l in enumerate(deleted, start_line):
                 out += f"{i:4d} | {l}\n"
             out += "```"
-            
             return out
         except Exception as e:
             return f"[Error: {e}]"
@@ -145,6 +148,8 @@ def register_tools(mcp):
                 note = f"\n🤖 reviewer: {rev.note}" if rev.note else ""
                 return (f"✅ Replaced lines {start_line}\u2013{end_line - 1} "
                         f"({old_replaced} \u2192 {len(new_lines_in)} lines) (reviewer corrected){note}")
+            if rev.blocked:
+                return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
             lines = lines[:start_line] + new_lines_in + lines[end_line:]
             atomic_write(path, lines)
             edit_end = start_line + len(new_lines_in)
@@ -216,6 +221,8 @@ def register_tools(mcp):
             if rev.reviewer_wrote:
                 note = f"\n🤖 reviewer: {rev.note}" if rev.note else ""
                 return f"✅ Line {line_number} (reviewer corrected){note}"
+            if rev.blocked:
+                return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
             lines[line_number] = new_line
             atomic_write(path, lines)
             inline = generate_inline_diff(old_line, new_line)

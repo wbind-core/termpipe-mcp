@@ -5,7 +5,10 @@ Every write-path tool calls pre_commit_gate() BEFORE atomic_write().
 The reviewer gets the proposed change + intelligent context and may:
   - APPROVE  → original write proceeds unchanged
   - CORRECT  → reviewer writes its own corrected version directly to disk
-               and sets _review_in_progress so the write-path skips atomic_write
+               and sets reviewer_wrote so the write-path skips atomic_write
+  - BLOCKED  → reviewer found an error and claimed FIXED but file was
+               unchanged after the attempt (ghost-write). Write is blocked
+               entirely — the bad content is NOT committed.
 
 Single-pass rule: if the reviewer commits anything, the path is done.
 No re-review. No recursion. _review_in_progress flag enforces this.
@@ -485,21 +488,34 @@ LANGUAGE-SPECIFIC RULES:
 """
 
 
-
-
-
-
 # ---------------------------------------------------------------------------
 # Public API — called by every write-path tool
 # ---------------------------------------------------------------------------
 
 class ReviewResult:
-    __slots__ = ("approved", "reviewer_wrote", "note")
+    """
+    Three mutually-exclusive outcomes from pre_commit_gate():
 
-    def __init__(self, approved: bool, reviewer_wrote: bool, note: str):
-        self.approved = approved          # True → proceed with original write
+      reviewer_wrote=True, blocked=False
+          → Reviewer identified an error and successfully wrote the corrected
+            file to disk. Caller MUST skip atomic_write.
+
+      reviewer_wrote=False, blocked=True
+          → Reviewer identified an error and claimed FIXED, but the file was
+            unchanged after the attempt (ghost-write). Caller MUST abort the
+            write entirely and surface the error to the user.
+
+      reviewer_wrote=False, blocked=False
+          → Either APPROVED or no reviewer configured. Caller proceeds with
+            the original atomic_write unchanged.
+    """
+    __slots__ = ("approved", "reviewer_wrote", "blocked", "note")
+
+    def __init__(self, approved: bool, reviewer_wrote: bool, blocked: bool, note: str):
+        self.approved = approved
         self.reviewer_wrote = reviewer_wrote  # True → reviewer already wrote file
-        self.note = note                  # Human-readable summary
+        self.blocked = blocked                # True → ghost-write detected, abort
+        self.note = note                      # Human-readable summary
 
 
 def pre_commit_gate(
@@ -514,17 +530,19 @@ def pre_commit_gate(
     """
     Run the pre-commit review gate.
 
-    Returns a ReviewResult. The caller must check .reviewer_wrote:
-      - True  → reviewer already committed the file; skip atomic_write
-      - False → reviewer approved; proceed with original atomic_write
+    Returns a ReviewResult. The caller must check in this order:
+      1. rev.reviewer_wrote → reviewer already committed; skip atomic_write
+      2. rev.blocked        → ghost-write detected; abort and return error to user
+      3. otherwise          → proceed with original atomic_write
     """
     # Single-pass guard: if we're already inside a review, skip
     if _is_reviewing():
-        return ReviewResult(approved=True, reviewer_wrote=False, note="")
+        return ReviewResult(approved=True, reviewer_wrote=False, blocked=False, note="")
 
     reviewer = _get_reviewer()
     if reviewer is None:
-        return ReviewResult(approved=True, reviewer_wrote=False, note="[no reviewer configured]")
+        return ReviewResult(approved=True, reviewer_wrote=False, blocked=False,
+                            note="[no reviewer configured]")
 
     lang = Path(path).suffix.lstrip(".") or "text"
     context_block = build_context_block(
@@ -543,37 +561,58 @@ def pre_commit_gate(
     try:
         response = reviewer(prompt, timeout)
     except Exception as e:
-        return ReviewResult(approved=True, reviewer_wrote=False, note=f"[reviewer error: {e}]")
+        return ReviewResult(approved=True, reviewer_wrote=False, blocked=False,
+                            note=f"[reviewer error: {e}]")
     finally:
         _set_reviewing(False)
 
     response = response.strip()
 
     if response.upper() == "APPROVED":
-        return ReviewResult(approved=True, reviewer_wrote=False, note="")
+        return ReviewResult(approved=True, reviewer_wrote=False, blocked=False, note="")
 
     if response.upper().startswith("FIXED:") or response.upper().startswith("FIXED "):
-        # Verify the reviewer actually wrote to disk before trusting reviewer_wrote=True.
-        # The ghost-write bug: reviewer reports FIXED but _call_termcp may have silently
-        # failed, leaving the file unmodified. We detect this by comparing the file's
-        # current content against lines_before — if identical, the write never happened.
+        # Ghost-write detection: verify the reviewer actually changed the file.
+        #
+        # BUG HISTORY: The original comparison used "".join(lines_before) which
+        # concatenated lines WITHOUT newline separators, producing a string that
+        # could never equal Path(path).read_text() (which has "\n" between lines).
+        # The comparison always evaluated False, so ghost-write was never detected
+        # and reviewer_wrote=True was returned unconditionally — even when the
+        # reviewer's write silently failed and the file was left unchanged.
+        #
+        # FIX: Use "\n".join(lines_before) to reconstruct the pre-edit file
+        # content with proper newline separators, matching what atomic_write
+        # produces and what read_text() returns.
         try:
             current = Path(path).read_text()
-            original = "".join(lines_before)
+            original = "\n".join(lines_before)  # FIX: was "".join() — wrong, no newlines
             if current.strip() == original.strip():
-                # Reviewer claimed FIXED but file is unchanged — fall through to original write
+                # Reviewer claimed FIXED but file is byte-for-byte identical to
+                # the pre-edit content. The write never happened.
+                # BLOCK the write — do NOT fall through to the original bad content.
                 return ReviewResult(
-                    approved=True,
+                    approved=False,
                     reviewer_wrote=False,
-                    note=f"[reviewer ghost-write detected — file unchanged after FIXED claim, proceeding with original write]",
+                    blocked=True,
+                    note=(
+                        f"[reviewer ghost-write: claimed FIXED but file is unchanged. "
+                        f"Write BLOCKED to prevent committing unreviewed content. "
+                        f"Reviewer said: {response[:120]}]"
+                    ),
                 )
         except Exception:
-            pass  # If we can't read the file, trust the reviewer
-        return ReviewResult(approved=False, reviewer_wrote=True, note=response)
+            # If we can't read the file at all, trust the reviewer rather than
+            # blocking a potentially valid write.
+            pass
+
+        # File is different from lines_before — reviewer successfully wrote.
+        return ReviewResult(approved=False, reviewer_wrote=True, blocked=False, note=response)
 
     # Unexpected response — treat as approved to avoid blocking writes
     return ReviewResult(
         approved=True,
         reviewer_wrote=False,
+        blocked=False,
         note=f"[reviewer gave unexpected response, proceeding: {response[:80]}]",
     )

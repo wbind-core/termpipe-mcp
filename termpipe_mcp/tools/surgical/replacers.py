@@ -5,7 +5,7 @@ Tool routing guide
 ------------------
   smart_replace(path, old_text, new_text)
       → Best default for most edits. Finds old_text anywhere in the file
-        (single or multi-line), replaces it, and is idempotent. Does not
+        (single or multi-line spans), replaces it, and is idempotent. Does not
         require knowing line numbers. Use dry_run=True to preview changes
         without writing.
 
@@ -119,6 +119,8 @@ def register_tools(mcp):
                     if rev.reviewer_wrote:
                         note = f"\n🤖 reviewer: {rev.note}" if rev.note else ""
                         return f"✅ Replaced occurrence at line {expected_line} (reviewer corrected){note}"
+                    if rev.blocked:
+                        return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
                     atomic_write(path, new_lines)
                     diff = generate_diff(lines, new_lines)
                     edit_end = expected_line + len(new_text.split("\n"))
@@ -166,6 +168,8 @@ def register_tools(mcp):
             if rev.reviewer_wrote:
                 note = f"\n🤖 reviewer: {rev.note}" if rev.note else ""
                 return f"✅ Replaced at line {start_line_no} (reviewer corrected){note}"
+            if rev.blocked:
+                return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
             atomic_write(path, new_lines)
             edit_end = start_line_no + len(new_text.split("\n"))
             diff = generate_diff(lines, new_lines)
