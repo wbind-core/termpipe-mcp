@@ -22,6 +22,63 @@ except ImportError:
     except ImportError:
         _workspace_resume = None
 
+try:
+    from termpipe_mcp.tools.workspace._bus import _ARTIFACTS_ROOT as _WS_ARTIFACTS_ROOT
+except ImportError:
+    try:
+        from tools.workspace._bus import _ARTIFACTS_ROOT as _WS_ARTIFACTS_ROOT
+    except ImportError:
+        _WS_ARTIFACTS_ROOT = None
+
+
+def _open_tasks_summary(cwd: str) -> str:
+    """
+    Return a formatted block of open task items for the workspace, or ''
+    if there is no workspace / task.md yet. Never raises.
+
+    Output example:
+        📋 OPEN TASKS (3):
+          [11] Surgical sub-tools lack grouping in list_tools
+          [12] system_info() doesn't show active reviewer backend
+          [13] get_recent_tool_calls() history resets on server restart
+    """
+    try:
+        if _WS_ARTIFACTS_ROOT is None:
+            return ""
+        import re
+        task_file = _WS_ARTIFACTS_ROOT / Path(cwd).name / "task.md"
+        if not task_file.exists():
+            return ""
+        lines = task_file.read_text(encoding="utf-8").splitlines()
+        open_items = []
+        for line in lines:
+            if not line.strip().startswith("- [ ]"):
+                continue
+            # Extract id from <!-- id: N -->
+            id_match = re.search(r"<!--\s*id:\s*(\d+)", line)
+            item_id = id_match.group(1) if id_match else "?"
+            # Strip markdown: remove "- [ ] **text**" → "text", drop HTML comment
+            text = re.sub(r"<!--.*?-->", "", line).strip()
+            text = re.sub(r"^-\s*\[\s*\]\s*", "", text)
+            text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+            # Trim to just the bold label (before " — ")
+            text = text.split(" — ")[0].strip()
+            open_items.append((item_id, text))
+        if not open_items:
+            return "\n✅ No open tasks\n"
+        # Cap at 15 items to avoid context bloat
+        shown = open_items[:15]
+        extra = len(open_items) - len(shown)
+        out = f"\n📋 OPEN TASKS ({len(open_items)}):\n"
+        for item_id, text in shown:
+            out += f"  [{item_id}] {text}\n"
+        if extra:
+            out += f"  … and {extra} more (read task.md for full list)\n"
+        return out
+    except Exception:
+        return ""
+
+
 # Tool call history tracking
 _tool_call_history = []
 
@@ -111,10 +168,11 @@ def register_tools(mcp):
             include_schemas: If True, include full JSON parameter schemas for each tool.
         """
         # Write cwd to known location so context_core middleware can pick it up
+        _resolved_cwd = str(Path(cwd).expanduser().resolve())
         try:
             _cc_path = Path.home() / ".context-core" / "current_workspace"
             _cc_path.parent.mkdir(parents=True, exist_ok=True)
-            _cc_path.write_text(cwd)
+            _cc_path.write_text(_resolved_cwd)
         except Exception:
             pass  # Never let this break list_tools
         # Resume workspace artifacts onto bus
@@ -125,6 +183,7 @@ def register_tools(mcp):
             pass  # Never let this break list_tools
         # Module-name → category label mapping
         MODULE_CATEGORY = {
+            "git":          "GIT",
             "process":      "PROCESS",
             "termf":        "TERMF",
             "iflow":        "IFLOW",
@@ -240,11 +299,15 @@ def register_tools(mcp):
             out += "\n"
         out += f"Total: {total} tools\n\n"
         out += "Use list_tools(category='surgical') for a specific category"
+        # ── Open tasks ────────────────────────────────────────────────────────
+        tasks_block = _open_tasks_summary(_resolved_cwd)
+        if tasks_block:
+            out += f"\n{tasks_block}"
         # ── Context-Core trigger ──────────────────────────────────────────────
         # cwd is the cross-MCP trigger signal. Now that you have the tool list,
         # call context-core:session(directory="{cwd}") to load project memory:
         # session history, LTM key facts, and open tasks. This is the handoff.
-        out += f"\n\n▶ NEXT: call context-core:session(directory=\"{cwd}\") to load project memory."
+        out += f"\n\n▶ NEXT: call context-core:session(directory=\"{_resolved_cwd}\") to load project memory."
         return out
 
     @mcp.tool()
@@ -264,10 +327,27 @@ def register_tools(mcp):
             task: Optional — what you're about to work on (passed to context-core:session).
         """
         # Write cwd to known location for context-core middleware
+        _resolved_cwd = str(Path(cwd).expanduser().resolve())
         try:
             _cc_path = Path.home() / ".context-core" / "current_workspace"
             _cc_path.parent.mkdir(parents=True, exist_ok=True)
-            _cc_path.write_text(cwd)
+            _cc_path.write_text(_resolved_cwd)
+        except Exception:
+            pass
+        # Log the boot event for cross-environment validation
+        try:
+            import json as _json
+            _log_path = Path.home() / ".context-core" / "boot_log.jsonl"
+            _log_entry = _json.dumps({
+                "event": "boot",
+                "cwd_raw": cwd,
+                "cwd_resolved": _resolved_cwd,
+                "task": task,
+                "timestamp": datetime.now().isoformat(),
+                "env": os.environ.get("TERM_PROGRAM") or os.environ.get("DISPLAY") or "unknown",
+            })
+            with open(_log_path, "a") as _lf:
+                _lf.write(_log_entry + "\n")
         except Exception:
             pass
         # Resume workspace artifacts onto bus
@@ -278,10 +358,11 @@ def register_tools(mcp):
             pass
 
         task_hint = f", task=\"{task}\"" if task else ""
+        tasks_block = _open_tasks_summary(_resolved_cwd)
         return (
-            f"Workspace armed: {cwd}\n"
-            f"\n"
-            f"▶ NOW CALL: context-core:session(directory=\"{cwd}\"{task_hint})\n"
+            f"Workspace armed: {_resolved_cwd}\n"
+            f"{tasks_block}\n"
+            f"▶ NOW CALL: context-core:session(directory=\"{_resolved_cwd}\"{task_hint})\n"
             f"\n"
             f"That will load: session history, LTM key facts, and open tasks for this project."
         )
@@ -297,12 +378,21 @@ def register_tools(mcp):
         import inspect
         import termpipe_mcp.tools as _tools_pkg
 
-        # Dynamically discover modules — respects __init__.py comments
+        results = []
+
+        # 0. Reload __init__.py first — picks up any modules that were
+        #    commented or uncommented since the server started.
+        try:
+            importlib.reload(_tools_pkg)
+            results.append("✅ termpipe_mcp.tools.__init__ reloaded")
+        except Exception as e:
+            # Bail early — don't clear registry if __init__ is broken.
+            return f"❌ __init__.py reload failed: {e}\nRegistry unchanged."
+
+        # Dynamically discover modules from freshly reloaded package
         MODULE_OBJECTS = [
             mod for _, mod in inspect.getmembers(_tools_pkg, inspect.ismodule)
         ]
-
-        results = []
 
         # 1. Reload each module
         for mod in MODULE_OBJECTS:
