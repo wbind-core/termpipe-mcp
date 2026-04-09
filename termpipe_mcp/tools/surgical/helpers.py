@@ -23,6 +23,7 @@ def omniproxy_query(prompt: str, model: str = "qwen3-coder-plus",
             f"{OMNIPROXY_URL}/v1/chat/completions",
             json={
                 "model": model,
+                "provider": "auto",
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": max_tokens,
                 "temperature": temperature,

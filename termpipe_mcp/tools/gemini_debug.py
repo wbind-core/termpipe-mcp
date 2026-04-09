@@ -42,16 +42,29 @@ def register_tools(mcp):
         include_history: bool = True
     ) -> str:
         """
-        Gemini-powered debugging assistant - get a different AI's perspective.
-        
-        Uses Google's Gemini model via CLI when you want a second opinion
-        or different approach than what you've been trying.
-        
+        Gemini-powered debugging assistant — second opinion via Gemini CLI subprocess.
+
+        Calls the local `gemini` CLI binary directly (not omniproxy). Use this
+        when you want a completely different model's perspective on a problem.
+
+        Use gemini_debug when:
+          • debug_assist didn't solve it and you want a fresh angle
+          • You specifically want Gemini's reasoning on a problem
+          • Gemini CLI is installed (returns a clear error if not)
+
+        Use debug_assist instead when:
+          • You need a fast first response — debug_assist is always available
+          • Gemini CLI is not installed
+          • You want tool call history included (gemini_debug supports it too,
+            but debug_assist integrates more tightly with the omniproxy stack)
+
+        Requires: `gemini` CLI installed and authenticated.
+
         Args:
-            problem: Describe what you're trying to do and what's going wrong
-            file_path: Optional file to include as context
-            line_range: Optional (start, end) line range to focus on
-            include_history: Include recent tool call history (default: True)
+            problem: Describe what you're trying to do and what's going wrong.
+            file_path: Optional file to include as context.
+            line_range: Optional (start, end) line range to focus on.
+            include_history: Include recent tool call history (default: True).
         """
         from termpipe_mcp.tools.system import _tool_call_history
         

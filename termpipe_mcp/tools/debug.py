@@ -19,26 +19,27 @@ def register_tools(mcp):
         include_history: bool = True
     ) -> str:
         """
-        AI-powered debugging assistant - call when stuck on a problem.
-        
-        Uses a fast iFlow model to analyze your situation and provide
-        specific, actionable guidance. Like having a pair programmer.
-        
-        Use cases:
-        - Can't figure out why an edit isn't working
-        - File has unexpected content/structure  
-        - Need help understanding an error
-        - Stuck on how to approach a task
-        
+        AI debugging assistant via omniproxy — fast, always available.
+
+        Routes through omniproxy (same gateway as the reviewer). Use this
+        as your first call when stuck — it's always on and responds quickly.
+
+        Use debug_assist when:
+          • You need immediate help with an error or unexpected output
+          • You want to analyze recent tool call history alongside the problem
+          • omniproxy is running (the default — check system_info() if unsure)
+
+        Use gemini_debug instead when:
+          • You want a second opinion from a different model (Gemini)
+          • debug_assist's answer isn't working and you want a fresh perspective
+          • Gemini CLI is installed (gemini_debug will tell you if it's not)
+
         Args:
-            problem: Describe what you're trying to do and what's going wrong
-            file_path: Optional file to include as context
-            line_start: Optional start line (0-based) to focus context
-            line_end: Optional end line (0-based, exclusive) to focus context
-            include_history: Include recent tool call history (default: True)
-        
-        Returns:
-            AI analysis with specific fix recommendations
+            problem: Describe what you're trying to do and what's going wrong.
+            file_path: Optional file to include as context.
+            line_start: Optional start line (0-based) to focus context.
+            line_end: Optional end line (0-based, exclusive) to focus context.
+            include_history: Include recent tool call history (default: True).
         """
         from termpipe_mcp.tools.iflow import iflow_query
         from termpipe_mcp.tools.system import _tool_call_history

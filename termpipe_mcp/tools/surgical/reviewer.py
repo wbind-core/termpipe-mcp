@@ -259,6 +259,7 @@ def _agentic_review(prompt: str, model: str, timeout: float,
                 f"{omniproxy_url}/v1/chat/completions",
                 json={
                     "model": model,
+                    "provider": "auto",
                     "messages": messages,
                     "tools": tool_defs,
                     "tool_choice": "auto",
