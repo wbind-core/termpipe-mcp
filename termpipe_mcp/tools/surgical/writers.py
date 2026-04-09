@@ -39,7 +39,8 @@ from .reviewer import pre_commit_gate
 def register_tools(mcp):
 
     @mcp.tool()
-    def insert_lines(path: str, line_number: int, content: str) -> str:
+    def insert_lines(path: str, line_number: int, content: str,
+                   dry_run: bool = False) -> str:
         """
         Insert lines BEFORE line_number (0-based).
 
@@ -48,6 +49,7 @@ def register_tools(mcp):
             line_number: 0-based index. New lines appear BEFORE this line.
                          Use 0 to prepend; use len(file) to append.
             content:     Text to insert. Use '\\n' to insert multiple lines.
+            dry_run:     If True, show diff preview without writing. Default: False.
         """
         try:
             lines = read_file_lines(path)
@@ -63,6 +65,13 @@ def register_tools(mcp):
                 return f"✅ Inserted {len(new_lines_in)} line(s) before line {line_number} (reviewer corrected){note}"
             if rev.blocked:
                 return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
+            
+            # Dry run - show preview without writing
+            if dry_run:
+                diff = generate_diff(old_copy, new_lines_list)
+                return (f"🔍 Dry run — would insert {len(new_lines_in)} line(s) before line {line_number}\n\n"
+                        f"```diff\n{diff}\n```\n\nFile NOT modified.")
+            
             atomic_write(path, new_lines_list)
             lines = new_lines_list
             diff = generate_diff(old_copy, lines)
@@ -76,7 +85,8 @@ def register_tools(mcp):
             return f"[Error: {e}]"
 
     @mcp.tool()
-    def delete_lines(path: str, start_line: int, end_line: int) -> str:
+    def delete_lines(path: str, start_line: int, end_line: int,
+                    dry_run: bool = False) -> str:
         """
         Delete lines start_line..end_line-1 (0-based, end exclusive).
 
@@ -85,6 +95,7 @@ def register_tools(mcp):
             start_line: 0-based index of first line to delete (inclusive).
             end_line:   0-based index — deletion stops BEFORE this line (exclusive).
                         Like Python slicing: delete_lines(f, 5, 8) removes lines 5, 6, 7.
+            dry_run:   If True, show diff preview without writing. Default: False.
         """
         try:
             lines = read_file_lines(path)
@@ -101,6 +112,18 @@ def register_tools(mcp):
                 return out
             if rev.blocked:
                 return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
+            
+            # Dry run - show preview without writing
+            if dry_run:
+                new_lines = lines[:start_line] + lines[end_line:]
+                diff = generate_diff(lines, new_lines)
+                deleted_preview = "\n".join(f"{i+start_line}: {l}" for i, l in enumerate(deleted))
+                return (f"🔍 Dry run — would delete lines {start_line}–{end_line - 1}\n"
+                        f"({len(deleted)} line(s))\n\n"
+                        f"```diff\n{diff}\n```\n\n"
+                        f"🗑️ Would delete:\n{deleted_preview}\n\n"
+                        f"File NOT modified.")
+            
             lines = new_lines_del
             atomic_write(path, lines)
             out = f"✅ Deleted {len(deleted)} line(s) ({start_line}\u2013{end_line - 1})\n"
@@ -114,7 +137,8 @@ def register_tools(mcp):
             return f"[Error: {e}]"
 
     @mcp.tool()
-    def overwrite_lines(path: str, start_line: int, end_line: int, content: str) -> str:
+    def overwrite_lines(path: str, start_line: int, end_line: int, content: str,
+                       dry_run: bool = False) -> str:
         """
         Replace a contiguous block of lines with new content (formerly replace_lines).
 
@@ -131,6 +155,7 @@ def register_tools(mcp):
                         Like Python slicing: overwrite_lines(f, 5, 8, ...) replaces lines 5, 6, 7.
             content:    Replacement text. Use '\\n' for multiple lines.
                         Can expand or contract the block (different line count is fine).
+            dry_run:   If True, show diff preview without writing. Default: False.
         """
         try:
             lines = read_file_lines(path)
@@ -150,6 +175,15 @@ def register_tools(mcp):
                         f"({old_replaced} \u2192 {len(new_lines_in)} lines) (reviewer corrected){note}")
             if rev.blocked:
                 return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
+            
+            # Dry run - show preview without writing
+            if dry_run:
+                new_lines = lines[:start_line] + new_lines_in + lines[end_line:]
+                diff = generate_diff(old_copy, new_lines)
+                return (f"🔍 Dry run — would replace lines {start_line}–{end_line - 1}\n"
+                        f"({old_replaced} → {len(new_lines_in)} lines)\n\n"
+                        f"```diff\n{diff}\n```\n\nFile NOT modified.")
+            
             lines = lines[:start_line] + new_lines_in + lines[end_line:]
             atomic_write(path, lines)
             edit_end = start_line + len(new_lines_in)
@@ -165,7 +199,8 @@ def register_tools(mcp):
     @mcp.tool()
     def patch_line(path: str, line_number: int,
                    old_text: str, new_text: str,
-                   replace_all: bool = False) -> str:
+                   replace_all: bool = False,
+                   dry_run: bool = False) -> str:
         """
         Replace a substring within a single known line (formerly replace_at_line).
 
@@ -182,6 +217,7 @@ def register_tools(mcp):
             new_text:    Replacement substring.
             replace_all: If True, replace all occurrences on the line.
                          Default (False) replaces only the first occurrence.
+            dry_run:     If True, show diff preview without writing. Default: False.
 
         Errors: If old_text is not found on line_number, returns diagnostics
         including similar nearby lines and AI analysis to help locate the right target.
@@ -223,6 +259,19 @@ def register_tools(mcp):
                 return f"✅ Line {line_number} (reviewer corrected){note}"
             if rev.blocked:
                 return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
+            
+            # Dry run - show preview without writing
+            if dry_run:
+                new_lines = lines.copy()
+                new_lines[line_number] = new_line
+                diff = generate_diff(lines, new_lines)
+                inline = generate_inline_diff(old_line, new_line)
+                return (f"🔍 Dry run — would modify line {line_number}\n\n"
+                        f"📐 {inline}\n"
+                        f"Before: {old_line.strip()}\n"
+                        f"After:  {new_line.strip()}\n\n"
+                        f"```diff\n{diff}\n```\n\nFile NOT modified.")
+            
             lines[line_number] = new_line
             atomic_write(path, lines)
             inline = generate_inline_diff(old_line, new_line)

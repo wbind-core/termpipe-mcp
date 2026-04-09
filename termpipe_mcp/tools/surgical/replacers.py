@@ -31,7 +31,7 @@ from typing import Optional
 from .helpers import (
     read_file_lines, atomic_write, generate_diff,
     find_similar_lines, line_delta_summary,
-    ai_analyze_error,
+    ai_analyze_error, undo_last_edit, get_last_edit,
 )
 from .reviewer import pre_commit_gate
 import os
@@ -240,3 +240,18 @@ def _remove_basic_duplicates(lines: list[str]) -> list[str]:
         if line != result[-1]:
             result.append(line)
     return result
+
+
+
+    @mcp.tool()
+    def undo() -> str:
+        """
+        Undo the last edit using git checkout.
+        
+        Reverts the file to its state at the last git commit.
+        Note: This restores to HEAD, not necessarily to the state before your last edit.
+        
+        Requires the file to be in a git repository.
+        """
+        return undo_last_edit()
+

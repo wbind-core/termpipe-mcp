@@ -149,3 +149,76 @@ def ai_analyze_error(error_type: str, context: dict) -> str:
         return ""
 
 
+
+
+
+# ---------------------------------------------------------------------------
+# Undo support
+# ---------------------------------------------------------------------------
+
+# In-memory storage for last edit (not persisted across restarts)
+_last_edit: Optional[dict] = None
+
+
+def record_edit(path: str, old_content: str, new_content: str) -> None:
+    """Record an edit for potential undo. Called by writers after successful writes."""
+    global _last_edit
+    _last_edit = {
+        "path": str(Path(path).expanduser().resolve()),
+        "old_content": old_content,
+        "new_content": new_content,
+    }
+
+
+def undo_last_edit() -> str:
+    """
+    Undo the last edit using git checkout.
+    
+    Returns a message describing what was undone.
+    Requires the file to be in a git repository.
+    """
+    global _last_edit
+    if _last_edit is None:
+        return "[Error] No edits to undo. You haven't made any edits in this session."
+    
+    path = _last_edit["path"]
+    p = Path(path)
+    
+    if not p.exists():
+        return f"[Error] File no longer exists: {path}"
+    
+    # Check if in a git repo
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=p.parent,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or result.stdout.strip() != "true":
+            return f"[Error] File is not in a git repository: {path}"
+    except Exception as e:
+        return f"[Error] Cannot check git status: {e}"
+    
+    # Try to undo via git
+    try:
+        result = subprocess.run(
+            ["git", "checkout", "HEAD", "--", str(p.name)],
+            cwd=p.parent,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return f"[Error] Git checkout failed: {result.stderr}"
+        
+        # Clear the last edit after successful undo
+        _last_edit = None
+        return f"✅ Undo successful: reverted {p.name} to HEAD\nℹ️  Note: This restored the file to its state at the last git commit, not necessarily the state before your last edit."
+    except Exception as e:
+        return f"[Error] Undo failed: {e}"
+
+
+def get_last_edit() -> Optional[dict]:
+    """Get info about the last edit for display purposes."""
+    return _last_edit
