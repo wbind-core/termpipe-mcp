@@ -153,35 +153,69 @@ def ai_analyze_error(error_type: str, context: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Undo support
+# Undo support - Multi-level edit history
 # ---------------------------------------------------------------------------
 
-# In-memory storage for last edit (not persisted across restarts)
-_last_edit: Optional[dict] = None
+import time
+import threading
+
+# Thread-safe edit history stack (not persisted across restarts)
+_edit_stack: list[dict] = []
+_stack_lock = threading.Lock()
+
+# Maximum history size
+MAX_HISTORY = 50
 
 
 def record_edit(path: str, old_content: str, new_content: str) -> None:
     """Record an edit for potential undo. Called by writers after successful writes."""
-    global _last_edit
-    _last_edit = {
-        "path": str(Path(path).expanduser().resolve()),
-        "old_content": old_content,
-        "new_content": new_content,
-    }
+    with _stack_lock:
+        entry = {
+            "path": str(Path(path).expanduser().resolve()),
+            "old_content": old_content,
+            "new_content": new_content,
+            "timestamp": time.time(),
+            "line_count": len(new_content.split("\n")),
+        }
+        _edit_stack.append(entry)
+        # Trim to max size
+        while len(_edit_stack) > MAX_HISTORY:
+            _edit_stack.pop(0)
 
 
-def undo_last_edit() -> str:
+def get_edit_history() -> list[dict]:
+    """Get the full edit history stack."""
+    with _stack_lock:
+        return list(_edit_stack)
+
+
+def get_edit_count() -> int:
+    """Get number of edits in history."""
+    with _stack_lock:
+        return len(_edit_stack)
+
+
+def undo_last_edit(n: int = 1) -> str:
     """
-    Undo the last edit using git checkout.
+    Undo the last N edits using git checkout.
     
     Returns a message describing what was undone.
     Requires the file to be in a git repository.
     """
-    global _last_edit
-    if _last_edit is None:
-        return "[Error] No edits to undo. You haven't made any edits in this session."
+    global _edit_stack
     
-    path = _last_edit["path"]
+    with _stack_lock:
+        if not _edit_stack:
+            return "[Error] No edits to undo. You haven't made any edits in this session."
+        
+        n = min(n, len(_edit_stack))
+        # Get the N most recent edits (we'll undo in reverse order)
+        edits_to_undo = _edit_stack[-n:]
+    
+    # Process undos - restore to the state BEFORE the oldest edit in the batch
+    # To do this properly: get the state at the edit BEFORE the oldest we're undoing
+    oldest_edit = edits_to_undo[0]
+    path = oldest_edit["path"]
     p = Path(path)
     
     if not p.exists():
@@ -201,24 +235,52 @@ def undo_last_edit() -> str:
     except Exception as e:
         return f"[Error] Cannot check git status: {e}"
     
-    # Try to undo via git
+    # Find the edit BEFORE the oldest we're undoing to get target state
+    with _stack_lock:
+        idx = _edit_stack.index(oldest_edit)
+        if idx > 0:
+            target_old = _edit_stack[idx - 1]["old_content"]
+        else:
+            # No prior edit - restore to git HEAD
+            target_old = None
+    
+    # Try to undo via git to the state before our edits
     try:
-        result = subprocess.run(
-            ["git", "checkout", "HEAD", "--", str(p.name)],
-            cwd=p.parent,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            return f"[Error] Git checkout failed: {result.stderr}"
+        if target_old is not None:
+            # Write the pre-edit content directly
+            p.write_text(target_old)
+        else:
+            # Restore from git HEAD
+            result = subprocess.run(
+                ["git", "checkout", "HEAD", "--", str(p.name)],
+                cwd=p.parent,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                return f"[Error] Git checkout failed: {result.stderr}"
         
-        # Clear the last edit after successful undo
-        _last_edit = None
-        return f"✅ Undo successful: reverted {p.name} to HEAD\nℹ️  Note: This restored the file to its state at the last git commit, not necessarily the state before your last edit."
+        # Remove the undone edits from history
+        with _stack_lock:
+            for _ in range(n):
+                if _edit_stack:
+                    _edit_stack.pop()
+        
+        return f"✅ Undo successful: reverted {p.name} by {n} edit(s)\nℹ️  Restored to state before your edits."
     except Exception as e:
         return f"[Error] Undo failed: {e}"
 
 
+def clear_history() -> str:
+    """Clear the edit history."""
+    global _edit_stack
+    with _stack_lock:
+        count = len(_edit_stack)
+        _edit_stack.clear()
+    return f"✅ Cleared {count} edit(s) from history"
+
+
 def get_last_edit() -> Optional[dict]:
     """Get info about the last edit for display purposes."""
-    return _last_edit
+    with _stack_lock:
+        return _edit_stack[-1] if _edit_stack else None

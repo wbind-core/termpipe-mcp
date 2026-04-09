@@ -31,7 +31,7 @@ from typing import Optional
 from .helpers import (
     read_file_lines, atomic_write, generate_diff,
     generate_inline_diff, find_similar_lines,
-    line_delta_summary, ai_analyze_error,
+    line_delta_summary, ai_analyze_error, record_edit,
 )
 from .reviewer import pre_commit_gate
 
@@ -73,6 +73,7 @@ def register_tools(mcp):
                         f"```diff\n{diff}\n```\n\nFile NOT modified.")
             
             atomic_write(path, new_lines_list)
+            record_edit(path, "\n".join(old_copy), "\n".join(new_lines_list))
             lines = new_lines_list
             diff = generate_diff(old_copy, lines)
             out = (f"✅ Inserted {len(new_lines_in)} line(s) before line {line_number}\n"
@@ -126,6 +127,7 @@ def register_tools(mcp):
             
             lines = new_lines_del
             atomic_write(path, lines)
+            record_edit(path, "\n".join(old_copy), "\n".join(lines))
             out = f"✅ Deleted {len(deleted)} line(s) ({start_line}\u2013{end_line - 1})\n"
             out += line_delta_summary(old_count, len(lines), start_line) + "\n\n"
             out += "🗑️ Deleted:\n```\n"
@@ -186,6 +188,7 @@ def register_tools(mcp):
             
             lines = lines[:start_line] + new_lines_in + lines[end_line:]
             atomic_write(path, lines)
+            record_edit(path, "\n".join(old_copy), "\n".join(lines))
             edit_end = start_line + len(new_lines_in)
             diff = generate_diff(old_copy, lines)
             out = (f"✅ Replaced lines {start_line}\u2013{end_line - 1} "
@@ -274,6 +277,7 @@ def register_tools(mcp):
             
             lines[line_number] = new_line
             atomic_write(path, lines)
+            record_edit(path, old_line, new_line)
             inline = generate_inline_diff(old_line, new_line)
             note = (f" (replaced {'all ' + str(count) if replace_all and count > 1 else 'first'}"
                     f" of {count} occurrence(s))") if count > 1 else ""
