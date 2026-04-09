@@ -86,6 +86,57 @@ def _open_tasks_summary(cwd: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Boot-time task reconciliation — auto-closes tasks found in recent commits
+# ---------------------------------------------------------------------------
+
+def _reconcile_tasks(cwd: str) -> int:
+    """
+    Scan recent git commits for [N] task ID patterns and auto-mark matching
+    open tasks as done in task.md. Returns number of tasks closed. Never raises.
+
+    This runs at every boot() / list_tools() call so the task list is always
+    reconciled against reality without any model intervention.
+    """
+    try:
+        import re, subprocess
+        if _WS_ARTIFACTS_ROOT is None:
+            return 0
+        task_file = _WS_ARTIFACTS_ROOT / Path(cwd).name / "task.md"
+        if not task_file.exists():
+            return 0
+
+        # Get last 30 commit messages
+        result = subprocess.run(
+            ["git", "log", "--pretty=%B", "-n", "30"],
+            cwd=cwd, capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            return 0
+
+        # Collect all [N] IDs mentioned across those commits
+        referenced_ids = set(re.findall(r'\[(\d+)\]', result.stdout))
+        if not referenced_ids:
+            return 0
+
+        lines = task_file.read_text(encoding="utf-8").splitlines()
+        closed = 0
+        new_lines = []
+        for line in lines:
+            if line.strip().startswith("- [ ]"):
+                id_match = re.search(r'<!--\s*id:\s*(\d+)', line)
+                if id_match and id_match.group(1) in referenced_ids:
+                    line = line.replace("- [ ]", "- [x]", 1)
+                    closed += 1
+            new_lines.append(line)
+
+        if closed:
+            task_file.write_text("\n".join(new_lines), encoding="utf-8")
+        return closed
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
 # Tool call history — persisted to disk so it survives server restarts [#13]
 # ---------------------------------------------------------------------------
 
@@ -355,6 +406,7 @@ def register_tools(mcp):
             out += "\n"
         out += f"Total: {total} tools\n\n"
         out += "Use list_tools(category='surgical') for a specific category"
+        _reconcile_tasks(_resolved_cwd)
         tasks_block = _open_tasks_summary(_resolved_cwd)
         if tasks_block:
             out += f"\n{tasks_block}"
@@ -398,6 +450,7 @@ def register_tools(mcp):
         except Exception:
             pass
         task_hint = f", task=\"{task}\"" if task else ""
+        _reconcile_tasks(_resolved_cwd)
         tasks_block = _open_tasks_summary(_resolved_cwd)
         return (
             f"Workspace armed: {_resolved_cwd}\n"
