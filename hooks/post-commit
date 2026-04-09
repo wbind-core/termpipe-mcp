@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# post-commit: auto-close task.md items referenced in commit message
+# Looks for [N] patterns in the commit subject line and marks matching
+# open tasks as done in the workspace task.md.
+
+TASK_FILE="$HOME/Documents/TermPipe/Workspaces/$(basename $(git rev-parse --show-toplevel))/task.md"
+
+[ -f "$TASK_FILE" ] || exit 0
+
+# Extract task IDs like [11] [12] from the commit message
+COMMIT_MSG=$(git log -1 --pretty=%B)
+IDS=$(echo "$COMMIT_MSG" | grep -oE '\[[0-9]+\]' | tr -d '[]')
+
+[ -z "$IDS" ] && exit 0
+
+CLOSED=0
+for ID in $IDS; do
+    # Match lines with "- [ ] ... <!-- id: N -->" and mark them done
+    if grep -qE "^- \[ \].*<!--\s*id:\s*${ID}\s*" "$TASK_FILE"; then
+        sed -i -E "s/^(- )\[ \](.*<!--\s*id:\s*${ID}\s*)/\1[x]\2/" "$TASK_FILE"
+        CLOSED=$((CLOSED + 1))
+    fi
+done
+
+[ $CLOSED -gt 0 ] && echo "✅ post-commit: auto-closed $CLOSED task(s) in task.md"
+exit 0

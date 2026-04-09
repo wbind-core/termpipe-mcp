@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# commit-msg: if there are open tasks and this commit doesn't reference any,
+# append a hint block so the author (human or model) knows to add IDs.
+
+COMMIT_FILE="$1"
+
+# Resolve repo root from the hook's own location (.git/hooks/commit-msg)
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$HOOK_DIR/../.." && pwd)"
+PROJECT_NAME="$(basename "$REPO_ROOT")"
+TASK_FILE="$HOME/Documents/TermPipe/Workspaces/${PROJECT_NAME}/task.md"
+
+[ -f "$TASK_FILE" ] || exit 0
+
+# If commit message already has [N] IDs, nothing to do
+if grep -qE '\[[0-9]+\]' "$COMMIT_FILE"; then
+    exit 0
+fi
+
+# Build hint lines from open tasks
+HINTS=""
+while IFS= read -r line; do
+    ID=$(echo "$line" | grep -oE '<!-- id: [0-9]+ -->' | grep -oE '[0-9]+')
+    TITLE=$(echo "$line" | sed -E 's/- \[ \] \*\*([^*]+)\*\*.*/\1/')
+    [ -n "$ID" ] && HINTS="${HINTS}#   [${ID}] ${TITLE}"$'\n'
+done < <(grep -E '^- \[ \]' "$TASK_FILE")
+
+[ -z "$HINTS" ] && exit 0
+
+printf '\n# Open tasks — add [N] to commit message to auto-close:\n%s' "$HINTS" >> "$COMMIT_FILE"
+exit 0
