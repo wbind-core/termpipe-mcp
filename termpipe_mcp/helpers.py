@@ -27,6 +27,32 @@ TERMPIPE_MCP_DIR = get_config_dir()
 THREAD_FILE = HOME / "claude-antig" / "thread.md"
 CONFIG_FILE = TERMPIPE_MCP_DIR / "config.json"
 
+OMNIPROXY_DIR = HOME / ".omniproxy"
+OMNIPROXY_KEYS = OMNIPROXY_DIR / "keys.json"
+OMNIPROXY_MODELS = OMNIPROXY_DIR / "models01.json"
+
+
+def get_omniproxy_key(provider: str = "openrouter") -> Optional[str]:
+    """Read an API key from ~/.omniproxy/keys.json by provider name."""
+    if OMNIPROXY_KEYS.exists():
+        try:
+            keys = json.loads(OMNIPROXY_KEYS.read_text())
+            return keys.get(provider)
+        except Exception:
+            pass
+    return None
+
+
+def get_omniproxy_models() -> list:
+    """Read model list from ~/.omniproxy/models01.json."""
+    if OMNIPROXY_MODELS.exists():
+        try:
+            return json.loads(OMNIPROXY_MODELS.read_text())
+        except Exception:
+            pass
+    return []
+
+
 # Legacy/compatibility constants (for tools that expect them)
 TERMPIPE_DIR = HOME / ".termpipe"  # Original termpipe directory
 CONFIG_PATH = CONFIG_FILE  # Alias for config file
@@ -51,13 +77,23 @@ def get_iflow_credentials() -> Tuple[str, str]:
     Raises:
         FileNotFoundError: If no credentials found in any location
     """
+    # Try ~/.omniproxy/keys.json first (canonical source)
+    if OMNIPROXY_KEYS.exists():
+        try:
+            keys = json.loads(OMNIPROXY_KEYS.read_text())
+            api_key = keys.get("openrouter")
+            if api_key:
+                return api_key, "https://openrouter.ai/api/v1"
+        except Exception:
+            pass
+
     # Try new TermPipe config first
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 config = json.load(f)
             api_key = config.get('api_key')
-            api_base = config.get('api_base', 'https://apis.iflow.cn/v1')
+            api_base = config.get('api_base', 'https://openrouter.ai/api/v1')
             if api_key:
                 return api_key, api_base
         except Exception:
@@ -70,7 +106,7 @@ def get_iflow_credentials() -> Tuple[str, str]:
             with open(iflow_settings, 'r') as f:
                 settings = json.load(f)
             api_key = settings.get('apiKey')
-            api_base = settings.get('baseUrl', 'https://apis.iflow.cn/v1')
+            api_base = settings.get('baseUrl', 'https://openrouter.ai/api/v1')
             if api_key:
                 return api_key, api_base
         except Exception:
@@ -83,7 +119,7 @@ def get_iflow_credentials() -> Tuple[str, str]:
             with open(iflow_oauth, 'r') as f:
                 oauth = json.load(f)
             api_key = oauth.get('apiKey')
-            api_base = 'https://apis.iflow.cn/v1'  # Default for OAuth
+            api_base = 'https://openrouter.ai/api/v1'
             if api_key:
                 return api_key, api_base
         except Exception:

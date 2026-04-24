@@ -1,0 +1,11 @@
+{
+  "is_first_run": false,
+  "reviewer_backend": "groq",
+  "reviewer_model": "openai/gpt-oss-120b",
+  "reviewer_timeout": 25.0,
+  "cliproxy_url": "http://127.0.0.1:8743",
+  "iflow_url": "http://127.0.0.1:8421",
+  "gemini_cli_model": "gemini-2.5-flash",
+  "schema_version": 1,
+  "omniproxy_url": "http://127.0.0.1:8743"
+}

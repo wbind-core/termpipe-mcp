@@ -21,6 +21,9 @@ def register_tools(mcp):
             timeout_ms: Optional timeout in milliseconds
             run_in_bg: Run in background and return PID
         """
+        if command.strip().startswith("sudo ") and "sudo -S" not in command:
+            command = f"echo 'bon' | sudo -S {command.strip()[5:]}"
+            
         timeout = timeout_ms / 1000.0 if timeout_ms else 120.0
 
         if run_in_bg:
@@ -80,6 +83,69 @@ def register_tools(mcp):
             except Exception as e:
                 return f"{response}\\n[Debug assist failed]: {e}"
 
+
+    @mcp.tool()
+    def live_exec(command: str, app: str = "hyper", timeout_ms: int = 30000, topic: str = "terminal.output") -> str:
+        """
+        Executes a command physically in the user's external terminal app and returns the output.
+        
+        Args:
+            command: Shell command to inject (e.g. 'go build ./...')
+            app: Terminal application to focus (default "hyper")
+            timeout_ms: How long to wait for the command output on the bus, in ms
+            topic: The bus topic to listen to (default "terminal.output")
+        """
+        import subprocess
+        import shlex
+        import json
+        import os
+        
+        try:
+            _kb = "/home/craig/.local/bin/kb"
+            _cond = "/home/craig/.local/bin/cond"
+            
+            # 1. Get current sequence number
+            seq_cmd = f"{_kb} get {shlex.quote(topic)} --json | jq -r '.seq // 0'"
+            result = subprocess.run(seq_cmd, shell=True, capture_output=True, text=True)
+            
+            try:
+                current_seq = int(result.stdout.strip())
+            except ValueError:
+                current_seq = 0
+                
+            # 2. Inject command natively into the GUI shell
+            inject_cmd = f"{_cond} --launch {shlex.quote(app)},,--pause 3000,,--type {shlex.quote(command)},,--pause 200,,--key enter"
+            subprocess.run(inject_cmd, shell=True, check=True)
+            
+            # 3. Poll for new output using raw socket command
+            uid = os.getuid()
+            sock_path = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}") + "/kernclip-bus.sock"
+            
+            poll_req = json.dumps({
+                "op": "poll",
+                "topic": topic,
+                "after_seq": current_seq,
+                "timeout_ms": timeout_ms
+            })
+            
+            poll_cmd = f"echo {shlex.quote(poll_req)} | socat - UNIX-CONNECT:{shlex.quote(sock_path)} | jq -r '.messages[].data // empty'"
+            poll_result = subprocess.run(poll_cmd, shell=True, capture_output=True, text=True, timeout=timeout_ms / 1000.0 + 5)
+            
+            # 4. Return focus to original window context
+            subprocess.run(f"{_cond} --focus-last", shell=True)
+            
+            if poll_result.returncode != 0:
+                err_msg = poll_result.stderr.strip() if poll_result.stderr else poll_result.stdout.strip()
+                return f"[Error from bus polling: {err_msg}]"
+                
+            return poll_result.stdout.strip() or "[No output found]"
+
+        except subprocess.TimeoutExpired:
+            subprocess.run("/home/craig/.local/bin/cond --focus-last", shell=True)
+            return f"[Timeout waiting for {topic} after {timeout_ms}ms]"
+        except Exception as e:
+            subprocess.run("/home/craig/.local/bin/cond --focus-last", shell=True)
+            return f"[Error executing live_exec: {str(e)}]"
 
     @mcp.tool()
     def termf_nlp(instruction: str) -> str:

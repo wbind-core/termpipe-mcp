@@ -20,6 +20,7 @@ _KC_SOCK       = Path(f"/run/user/{os.getuid()}/kernclip-bus.sock")
 # Bus topic namespace
 _TOPIC_ACTIVE      = "termpipe.workspace.active"
 _TOPIC_TASK        = "termpipe.workspace.task"
+_TOPIC_INIT        = "termpipe.workspace.init"  # omniproxys subscribe here
 _TOPIC_PLAN        = "termpipe.workspace.plan"
 _TOPIC_WALKTHROUGH = "termpipe.workspace.walkthrough"
 

@@ -208,12 +208,12 @@ def register_tools(mcp):
                                       lines[end_line:])
             if notes:
                 try:
-                    from termpipe_mcp.tools.surgical.helpers import omniproxy_query
+                    from termpipe_mcp.tools.surgical.helpers import llm_query
                     prompt = (f"Remove duplicates per instructions: {notes}\n\n"
                               + "\n".join(f"{i + start_line}: {l}"
                                           for i, l in enumerate(target))
                               + "\n\nReturn cleaned lines only, no line numbers.")
-                    processed = omniproxy_query(
+                    processed = llm_query(
                         prompt, model="qwen3-coder-plus",
                         max_tokens=500, temperature=0.1,
                     ).split('\n')

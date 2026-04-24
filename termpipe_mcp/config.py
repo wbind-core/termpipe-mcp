@@ -33,8 +33,8 @@ class Config:
             # Create default config
             default = {
                 "api_key": "",
-                "api_base": "https://apis.iflow.cn/v1",
-                "default_model": "qwen3-coder-plus",
+                "api_base": "https://openrouter.ai/api/v1",
+                "default_model": None,
                 "server_port": 8421,
                 "server_host": "127.0.0.1"
             }

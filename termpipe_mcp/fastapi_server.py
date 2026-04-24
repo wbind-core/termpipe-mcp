@@ -23,8 +23,10 @@ from termpipe_mcp.config import config
 # Request/Response Models
 # =============================================================================
 
+
 class CommandRequest(BaseModel):
     """Request model for command execution"""
+
     command: str = Field(..., description="Command name (usually 'exec')")
     args: List[str] = Field(default=[], description="Command arguments")
     raw_command: Optional[str] = Field(None, description="Raw command string")
@@ -33,12 +35,14 @@ class CommandRequest(BaseModel):
 
 class NLPRequest(BaseModel):
     """Request model for NLP queries"""
+
     query: str = Field(..., description="Natural language query")
     execute: bool = Field(True, description="Execute resulting command")
 
 
 class CommandResponse(BaseModel):
     """Response model for command execution"""
+
     success: bool
     output: str = ""
     error: Optional[str] = None
@@ -50,6 +54,7 @@ class CommandResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Health check response"""
+
     status: str
     uptime: float
     version: str = "2.0.0"
@@ -75,7 +80,7 @@ app = FastAPI(
     title="TermPipe MCP Backend",
     description="Minimal FastAPI backend for TermPipe MCP server",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -91,41 +96,35 @@ app.add_middleware(
 # API Endpoints
 # =============================================================================
 
+
 @app.get("/", tags=["General"])
 async def root():
     """Root endpoint"""
     return {
         "service": "TermPipe MCP Backend",
         "version": "2.0.0",
-        "endpoints": {
-            "health": "GET /health",
-            "execute": "POST /exec",
-            "nlp": "POST /nlp"
-        }
+        "endpoints": {"health": "GET /health", "execute": "POST /exec", "nlp": "POST /nlp"},
     }
 
 
 @app.get("/health", response_model=HealthResponse, tags=["General"])
 async def health_check():
     """Health check endpoint"""
-    return HealthResponse(
-        status="healthy",
-        uptime=time.time() - start_time
-    )
+    return HealthResponse(status="healthy", uptime=time.time() - start_time)
 
 
 @app.post("/exec", response_model=CommandResponse, tags=["Commands"])
 async def execute_command(request: CommandRequest):
     """
     Execute a shell command.
-    
+
     Supports:
     - Direct command execution via raw_command
     - Argument list via args
     - Timeout configuration
     """
     start = time.time()
-    
+
     try:
         # Determine command to execute
         if request.command == "exec":
@@ -138,12 +137,12 @@ async def execute_command(request: CommandRequest):
                     success=False,
                     error="No command provided",
                     exit_code=1,
-                    duration=time.time() - start
+                    duration=time.time() - start,
                 )
         else:
             # Other commands (ls, pwd, cat, etc.)
             cmd = f"{request.command} {' '.join(request.args)}"
-        
+
         # Wrap command in interactive shell to support aliases/functions
         shell = os.environ.get("SHELL", "/bin/bash")
 
@@ -151,46 +150,39 @@ async def execute_command(request: CommandRequest):
         # Transforms: sudo foo  →  echo "bon" | sudo -S foo
         def _inject_sudo_password(c: str) -> str:
             return re.sub(r'(?<!["\'\w])sudo(?!\s*-S)\s+', 'echo "bon" | sudo -S ', c)
+
         cmd = _inject_sudo_password(cmd)
 
         wrapped_cmd = f"{shell} -i -c {shlex.quote(cmd)}"
-        
+
         # Execute with timeout
         timeout = request.timeout or 120
         proc = await asyncio.create_subprocess_shell(
-            wrapped_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            wrapped_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        
+
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), 
-                timeout=timeout
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
             return CommandResponse(
                 success=False,
                 error=f"Command timed out after {timeout}s",
                 exit_code=124,
-                duration=time.time() - start
+                duration=time.time() - start,
             )
-        
+
         return CommandResponse(
             success=proc.returncode == 0,
             output=stdout.decode() if stdout else "",
             error=stderr.decode() if stderr else None,
             exit_code=proc.returncode or 0,
-            duration=time.time() - start
+            duration=time.time() - start,
         )
-        
+
     except Exception as e:
         return CommandResponse(
-            success=False,
-            error=str(e),
-            exit_code=1,
-            duration=time.time() - start
+            success=False, error=str(e), exit_code=1, duration=time.time() - start
         )
 
 
@@ -198,25 +190,12 @@ async def execute_command(request: CommandRequest):
 async def nlp_query(request: NLPRequest):
     """
     Process a natural language query and optionally execute the command.
-    
+
     Uses iFlow API to translate natural language to shell commands.
     """
     start = time.time()
-    
     try:
-        # Get iFlow credentials
-        try:
-            api_key, api_base = config.get_iflow_credentials()
-        except ValueError as e:
-            return CommandResponse(
-                success=False,
-                error=str(e),
-                exit_code=1,
-                duration=time.time() - start
-            )
-        
-        # Call iFlow to translate query to command
-        import httpx
+        from termpipe_mcp.tools.surgical.helpers import llm_query
         
         system_prompt = """You are a Linux shell command expert. Convert natural language queries to precise shell commands.
 Rules:
@@ -225,60 +204,35 @@ Rules:
 - Prioritize readability and safety
 - Use absolute paths when possible
 """
+        full_prompt = f"{system_prompt}\nQuery: {request.query}"
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{api_base}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": config.get("default_model", "qwen3-coder-plus"),
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": request.query}
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 500
-                },
-                timeout=30.0
-            )
-            
-            if response.status_code != 200:
-                return CommandResponse(
-                    success=False,
-                    error=f"iFlow API error: HTTP {response.status_code}",
-                    exit_code=1,
-                    duration=time.time() - start
-                )
-            
-            data = response.json()
-            command = data["choices"][0]["message"]["content"].strip()
-            
-            # Clean up command (remove markdown code blocks if present)
-            if command.startswith("```"):
-                lines = command.split("\n")
-                command = "\n".join(lines[1:-1]) if len(lines) > 2 else command
-                command = command.strip()
+        result = llm_query(full_prompt, model=None, timeout=30)
+        command = result.strip()
         
+        # Clean up command (remove markdown code blocks if present)
+        if command.startswith("```"):
+            lines = command.split("\n")
+            command = "\n".join(lines[1:-1]) if len(lines) > 2 else command
+            command = command.strip()
+
         # Execute if requested
         if request.execute:
             # Wrap command in interactive shell
             shell = os.environ.get("SHELL", "/bin/bash")
             wrapped_cmd = f"{shell} -i -c {shlex.quote(command)}"
-            
+
             proc = await asyncio.create_subprocess_shell(
-                wrapped_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                wrapped_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-            
+
             return CommandResponse(
                 success=proc.returncode == 0,
                 output=stdout.decode() if stdout else "",
                 error=stderr.decode() if stderr else None,
                 exit_code=proc.returncode or 0,
                 duration=time.time() - start,
-                metadata={"command_executed": command}
+                metadata={"command_executed": command},
             )
         else:
             # Just return the suggested command
@@ -286,13 +240,10 @@ Rules:
                 success=True,
                 output=command,
                 duration=time.time() - start,
-                metadata={"suggested_command": command}
+                metadata={"suggested_command": command},
             )
-        
+
     except Exception as e:
         return CommandResponse(
-            success=False,
-            error=str(e),
-            exit_code=1,
-            duration=time.time() - start
+            success=False, error=str(e), exit_code=1, duration=time.time() - start
         )

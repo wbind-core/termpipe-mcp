@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 
-from ._bus import _bus_pub, _bus_get, _ATYPE_TO_TOPIC, _ARTIFACTS_ROOT, _TOPIC_ACTIVE
-from ._db import _db_read_artifact, _db_write_artifact, _db_list_artifacts
+from ._bus import _bus_pub, _bus_get, _ATYPE_TO_TOPIC, _ARTIFACTS_ROOT, _TOPIC_ACTIVE, _TOPIC_INIT
+from ._db import _db_read_artifact, _db_write_artifact, _db_list_artifacts, _db_list_tasks
 from ._files import _artifact_dir, _write_artifact_files, _write_metadata
 from ._registry import _registry_ws_id
 from ._task import _get_plan_status, _pack_summary
@@ -70,6 +70,28 @@ def workspace_resume(cwd: str) -> None:
         "path": cwd,
         "resumed_at": datetime.now(timezone.utc).isoformat(),
     }), mime="application/json")
+
+    # Publish init event with full context for omnis agent
+    try:
+        tasks = _db_list_tasks(ws_id) or []
+    except Exception:
+        tasks = []
+    try:
+        artifacts = _db_list_artifacts(ws_id) or []
+    except Exception:
+        artifacts = []
+
+    init_payload = {
+        "ws_id": ws_id,
+        "project": project_name,
+        "path": cwd,
+        "is_new": False,
+        "tasks": tasks,
+        "artifacts": [a.get("name", str(a)) for a in artifacts],
+        "instruction": f"Workspace '{project_name}' at {cwd}. You will receive task updates.",
+    }
+
+    _bus_pub(_TOPIC_INIT, json.dumps(init_payload), mime="application/json")
 
     for art in _db_list_artifacts(ws_id):
         row = _db_read_artifact(ws_id, art["name"])

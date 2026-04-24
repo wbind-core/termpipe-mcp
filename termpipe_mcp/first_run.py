@@ -6,7 +6,7 @@ Handles:
   - Config/settings directory creation
   - Default config.json + settings.json scaffolding
   - MCP client detection and auto-registration
-    (Claude Desktop, iFlow CLI, Gemini CLI, opencode)
+    (Claude Desktop, opencode)
   - Autostart setup (systemd / launchd / Windows Task Scheduler)
   - gtt detection and PATH report
 
@@ -52,15 +52,11 @@ def _mcp_client_paths() -> dict[str, Path]:
         support = HOME / "Library" / "Application Support"
         paths["claude_desktop"] = support / "Claude" / "claude_desktop_config.json"
         paths["opencode"]       = support / "opencode" / "config.json"
-        paths["iflow_cli"]      = HOME / ".iflow" / "mcp_servers.json"
-        paths["gemini_cli"]     = HOME / ".gemini" / "mcp_servers.json"
 
     else:  # Linux
         config_home = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
         paths["claude_desktop"] = config_home / "Claude" / "claude_desktop_config.json"
         paths["opencode"]       = config_home / "opencode" / "config.json"
-        paths["iflow_cli"]      = HOME / ".iflow" / "mcp_servers.json"
-        paths["gemini_cli"]     = HOME / ".gemini" / "mcp_servers.json"
 
     return paths
 
@@ -88,7 +84,7 @@ def scaffold_config() -> bool:
         return False
     default = {
         "api_key":     "",
-        "api_base":    "https://apis.iflow.cn/v1",
+        "api_base":    "http://127.0.0.1:8743/v1",  # Omniproxy
         "server_host": "127.0.0.1",
         "server_port": 8421,
     }
@@ -325,6 +321,30 @@ def check_gtt() -> dict:
             result["version"] = "unknown"
     return result
 
+def deploy_binaries() -> dict:
+    """Deploy bundled termpipe binaries to ~/.local/bin and ensure they are executable."""
+    results = {}
+    import os
+    import shutil
+    import stat
+    
+    bin_dir = Path.home() / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    
+    repo_root = Path(__file__).parent.parent.resolve()
+    bundled_dir = repo_root / "binaries"
+    
+    if bundled_dir.exists() and bundled_dir.is_dir():
+        for item in bundled_dir.iterdir():
+            if item.is_file():
+                dest = bin_dir / item.name
+                shutil.copy2(item, dest)
+                # make executable
+                st = os.stat(dest)
+                os.chmod(dest, st.st_mode | stat.S_IEXEC)
+                results[item.name] = "deployed"
+    return results
+
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
@@ -394,6 +414,17 @@ def run(auto: bool = False, quiet: bool = False) -> dict:
            "✓ " if "already" in autostart else "⚠️ "
     p(f"   {icon} {autostart}")
     results["autostart"] = autostart
+
+    # 6. Deploy local binaries
+    p()
+    p("📦 Deploying TermPipe daemons...")
+    bin_results = deploy_binaries()
+    if bin_results:
+        for name, status in bin_results.items():
+            p(f"   ✅ {name}: {status}")
+    else:
+        p("   ✓ nothing to deploy (binaries/ missing or empty)")
+    results["deployed_binaries"] = bin_results
 
     p()
     p("════════════════════════════════════════════════════════════")

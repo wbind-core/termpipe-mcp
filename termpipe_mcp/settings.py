@@ -10,12 +10,9 @@ SETTINGS_PATH = get_config_dir() / "settings.json"
 
 DEFAULTS = {
     "is_first_run":      True,
-    "reviewer_backend":  None,   # "cliproxy" | "iflow" | "gemini-cli" | None
-    "reviewer_model":    None,   # "auto" | "gemini-2.5-flash" | "qwen3-coder-plus" | etc.
-    "reviewer_timeout":  8.0,
-    "cliproxy_url":      "http://127.0.0.1:7599",
-    "iflow_url":         "http://127.0.0.1:8421",
-    "gemini_cli_model":  "gemini-2.5-flash",
+    "reviewer_backend":  "openrouter",
+    "reviewer_model":    None,
+    "reviewer_timeout":  30.0,
     "schema_version":    1,
 }
 

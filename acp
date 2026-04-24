@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# acp-daemon — Self-contained launcher for the ACP daemon.
+# Automatically uses the correct venv Python interpreter.
+#
+# Usage:
+#   ./acp-daemon --backend gemini          # Start daemon
+#   ./acp-daemon --backend gemini --query "What is 2+2?"  # Single query
+#
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_PYTHON="${SCRIPT_DIR}/.venv/bin/python"
+DAEMON_SCRIPT="${SCRIPT_DIR}/acp_daemon_standalone.py"
+
+if [[ ! -x "$VENV_PYTHON" ]]; then
+    echo "Error: venv Python not found at: $VENV_PYTHON" >&2
+    echo "Make sure the .venv is installed in: $SCRIPT_DIR/.venv" >&2
+    exit 1
+fi
+
+if [[ ! -f "$DAEMON_SCRIPT" ]]; then
+    echo "Error: acp_daemon.py not found at: $DAEMON_SCRIPT" >&2
+    exit 1
+fi
+
+exec "$VENV_PYTHON" "$DAEMON_SCRIPT" "$@"

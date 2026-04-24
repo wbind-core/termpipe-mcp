@@ -19,15 +19,15 @@ def register_tools(mcp):
         include_history: bool = True
     ) -> str:
         """
-        AI debugging assistant via omniproxy — fast, always available.
+        AI debugging assistant via openrouter — fast, always available.
 
-        Routes through omniproxy (same gateway as the reviewer). Use this
+        Routes through openrouter (same gateway as the reviewer). Use this
         as your first call when stuck — it's always on and responds quickly.
 
         Use debug_assist when:
           • You need immediate help with an error or unexpected output
           • You want to analyze recent tool call history alongside the problem
-          • omniproxy is running (the default — check system_info() if unsure)
+          • openrouter is running (the default — check system_info() if unsure)
 
         Use gemini_debug instead when:
           • You want a second opinion from a different model (Gemini)
@@ -41,7 +41,7 @@ def register_tools(mcp):
             line_end: Optional end line (0-based, exclusive) to focus context.
             include_history: Include recent tool call history (default: True).
         """
-        from termpipe_mcp.tools.iflow import iflow_query
+        from termpipe_mcp.tools.surgical.helpers import llm_query
         from termpipe_mcp.tools.system import _tool_call_history
         
         # Build context
@@ -113,7 +113,7 @@ Be concise and actionable. Give exact line numbers, exact text to use, exact com
 Format your fix so it can be directly used."""
 
         try:
-            result = iflow_query(
+            result = llm_query(
                 prompt, 
                 model="qwen3-coder-plus",  # Fast model for quick debugging
                 max_tokens=600,
@@ -141,7 +141,7 @@ Format your fix so it can be directly used."""
         Args:
             path: File path to analyze
         """
-        from termpipe_mcp.tools.iflow import iflow_query
+        from termpipe_mcp.tools.surgical.helpers import llm_query
         
         try:
             p = Path(path).expanduser()
@@ -180,7 +180,7 @@ Provide:
 
 Be concise but specific with line numbers."""
 
-            result = iflow_query(
+            result = llm_query(
                 prompt,
                 model="qwen3-coder-plus",
                 max_tokens=500,
@@ -207,7 +207,7 @@ Be concise but specific with line numbers."""
             file_path: File you want to edit
             goal: What you're trying to accomplish
         """
-        from termpipe_mcp.tools.iflow import iflow_query
+        from termpipe_mcp.tools.surgical.helpers import llm_query
         
         try:
             p = Path(file_path).expanduser()
@@ -247,7 +247,7 @@ Provide:
 
 Be specific - give exact line numbers, exact text to match."""
 
-            result = iflow_query(
+            result = llm_query(
                 prompt,
                 model="qwen3-coder-plus",
                 max_tokens=500,
@@ -267,7 +267,7 @@ def analyze_and_suggest_fix(command: str, error_message: str, help_output: str =
     """
     Analyzes a failed command and suggests a fix using an AI model.
     """
-    from termpipe_mcp.tools.iflow import iflow_query
+    from termpipe_mcp.tools.surgical.helpers import llm_query
 
     prompt = f"""A command failed. Analyze the command, error, and help output to suggest a fix.
 
@@ -296,7 +296,7 @@ Based on the error message and the `--help` output, analyze the failed command a
 """
 
     try:
-        suggestion = iflow_query(
+        suggestion = llm_query(
             prompt,
             model="qwen3-coder-plus",
             max_tokens=400,

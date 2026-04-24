@@ -1,0 +1,570 @@
+# Zero-Deps Universal Hardware Control Platform - Final Implementation Plan
+
+## Narrative
+
+We are building a universal hardware control system that automatically detects the user's computer hardware and deploys appropriate control mechanisms. Rather than relying on external package managers, we clone all vendor toolkit source repositories directly and incorporate their code into our local codebase. Our existing tools `cond` (automation CLI) and `kb` (IPC message bus) provide the orchestration layer. We now add hardware detection, sensor monitoring, fan control, power management, brightness control, audio control, and vendor-specific toolkits for RGB and GPU switching.
+
+## Phase 1: Core Infrastructure (Already Built)
+
+Your `cond` and `kb` tools are complete. No changes needed.
+
+## Phase 2: Clone and Incorporate All Repositories
+
+Create a `vendor/` directory and clone each repository:
+
+```bash
+mkdir -p vendor
+cd vendor
+
+# Power management
+git clone https://github.com/ZviBaratz/hara-hachi-bu.git
+
+# Brightness control
+git clone https://github.com/Hummer12007/brightnessctl.git
+
+# Audio control (two repos - combine logic)
+git clone https://github.com/francislavoie/gnome-shell-volume-scroller.git
+git clone https://github.com/Junker/stumpwm-wpctl.git
+
+# Sensor monitoring
+git clone https://github.com/abreufilho/vitals-gnome-extension.git
+
+# Fan control
+git clone https://github.com/wiiznokes/fan-control.git
+
+# RGB control (for peripherals)
+git clone https://github.com/openrazer/openrazer.git
+
+# GPU switching
+git clone https://github.com/supergfxctl/supergfxctl.git
+
+# Vendor-specific toolkits
+git clone https://github.com/NeroReflex/asusctl.git          # ASUS ROG
+git clone https://github.com/johnfanv2/LenovoLegionLinux.git # Lenovo Legion
+git clone https://github.com/system76/system76-module.git    # System76
+```
+
+## Phase 3: Extract and Integrate Each Repository
+
+### 3.1 hara-hachi-bu (Power Management)
+
+**Extract these files:**
+- `lib/battery.js` - sysfs battery threshold logic
+- `lib/power-profiles.js` - power-profiles-daemon DBus interface
+- `lib/rule-engine.js` - auto-switching rule logic
+- `resources/hhb-power-ctl` - privileged helper script
+
+**Integrate into cond:**
+- Port the battery threshold write logic to Rust (or keep as shell function called by cond)
+- Create `cond --battery-mode [full|balanced|max]` - writes to `/sys/class/power_supply/BAT*/charge_control_end_threshold` (100, 80, 60 respectively)
+- Create `cond --power-profile [performance|balanced|power-saver]` - calls `power-profiles-daemon` DBus API
+- Port the rule engine to listen to `kb` topics (`sys.power.ac`, `sys.lid`, `sys.display.external`) and trigger profile changes
+
+**Files to copy to cond source:**
+```
+cond/src/power/battery.rs
+cond/src/power/profiles.rs
+cond/src/power/rules.rs
+```
+
+### 3.2 brightnessctl (Brightness Control)
+
+**Extract these files:**
+- `brightnessctl.c` - main C implementation
+- `90-brightnessctl.rules` - udev rules for permissions
+
+**Integrate into cond:**
+- Rewrite the core functions in Rust (or compile as static library and link)
+- Device enumeration: scan `/sys/class/backlight/` and `/sys/class/leds/`
+- Write logic: echo value to `brightness` file in device directory
+- Percentage calculations and delta handling (`+10%`, `50-`)
+- Create `cond --brightness [value]` with same syntax as brightnessctl
+- Create `cond --brightness --list-devices`
+- Install udev rules to `/etc/udev/rules.d/90-brightnessctl.rules`
+
+**Files to copy to cond source:**
+```
+cond/src/brightness/device.rs
+cond/src/brightness/control.rs
+```
+
+### 3.3 gnome-shell-volume-scroller + stumpwm-wpctl (Audio Control)
+
+**Extract from gnome-shell-volume-scroller:**
+- DBus calls to WirePlumber/PulseAudio for volume control
+- Middle-click mute toggle logic
+
+**Extract from stumpwm-wpctl:**
+- `wpctl.lisp` - non-blocking WirePlumber DBus interface
+- Source (microphone) control commands
+- Volume step increment/decrement logic
+
+**Integrate into cond:**
+- Create `cond --volume [0-150]` - set sink volume
+- Create `cond --volume up/down` - increase/decrease by step
+- Create `cond --volume mute/toggle` - mute control
+- Create `cond --source-volume` - microphone control
+- Create `cond --source-mute` - microphone mute
+- Use `kb pub sys.audio.volume` to broadcast volume changes
+
+**Files to copy to cond source:**
+```
+cond/src/audio/sink.rs
+cond/src/audio/source.rs
+cond/src/audio/wireplumber.rs
+```
+
+### 3.4 vitals-gnome-extension (Sensor Monitoring)
+
+**Extract these files:**
+- `sensors.js` - hwmon sensor reading logic
+- `values.js` - temperature, fan speed, voltage parsing
+- Uses `lm-sensors` via `gir1.2-gtop-2.0` bindings
+
+**Integrate into cond:**
+- Read temperatures from `/sys/class/thermal/thermal_zone*/temp`
+- Read fan speeds from `/sys/class/hwmon/hwmon*/fan*_input`
+- Read voltages from `/sys/class/hwmon/hwmon*/in*_input`
+- Read CPU/RAM stats via `/proc/stat` and `/proc/meminfo`
+- Read network stats via `/proc/net/dev`
+- Read disk stats via `/proc/diskstats`
+- Create `cond --sensors` - display all sensor readings
+- Create `cond --sensors --watch` - continuous monitoring
+- Publish readings to `kb topics`: `sys.sensors.temp`, `sys.sensors.fan`, `sys.sensors.voltage`
+
+**Files to copy to cond source:**
+```
+cond/src/sensors/temperature.rs
+cond/src/sensors/fan.rs
+cond/src/sensors/voltage.rs
+cond/src/sensors/system.rs
+```
+
+### 3.5 fan-control (Fan Control)
+
+**Extract these files (Rust crates):**
+- `hardware/` - PWM and sensor abstraction layer
+- `data/` - configuration structures (Node, Config)
+- Key files: `hardware/src/linux/pwm.rs`, `hardware/src/linux/hwmon.rs`
+
+**Integrate into cond:**
+- Use the `hardware` crate directly (it's already Rust)
+- Create `cond --fan-profile [quiet|balanced|performance|full]` - load predefined curve
+- Create `cond --fan-curve --cpu "points" --gpu "points"` - custom curve
+- Create `cond --fan-status` - show current fan speeds and temperatures
+- Save/load configurations from `~/.config/cond/fan/`
+- Auto-apply profile based on temperature thresholds (using rule engine from Phase 3.1)
+
+**Files to copy to cond source:**
+```
+cond/src/fan/control.rs
+cond/src/fan/curve.rs
+cond/src/fan/profile.rs
+```
+**Dependency:** Add `fan-control/hardware` as local path dependency in `Cargo.toml`
+
+### 3.6 openrazer (RGB Control for Peripherals)
+
+**Extract these files:**
+- `daemon/openrazer_daemon/` - DBus service for Razer devices
+- `driver/razerkbd_driver.c` - keyboard LED control
+- `driver/razer_mouse_driver.c` - mouse LED control
+
+**Integrate into cond:**
+- Extract the USB HID protocol implementation (vendor ID 1532)
+- Create simplified RGB control functions:
+  - `cond --rgb [device] static --color [hex]`
+  - `cond --rgb [device] breathing --color [hex] --speed [slow/med/fast]`
+  - `cond --rgb [device] wave --direction [left/right]`
+  - `cond --rgb [device] off`
+- Device detection via `lsusb` for Razer products
+- Write directly to USB HID reports (no daemon needed)
+
+**Files to copy to cond source:**
+```
+cond/src/rgb/razer.rs
+cond/src/rgb/hid.rs
+cond/src/rgb/effects.rs
+```
+
+### 3.7 supergfxctl (GPU MUX Switching)
+
+**Extract these files:**
+- `src/backend.rs` - GPU mode switching logic
+- `src/integrated.rs` - integrated GPU only
+- `src/discrete.rs` - discrete GPU only
+- `src/hybrid.rs` - hybrid (PRIME) mode
+- `src/compute.rs` - compute mode
+
+**Integrate into cond:**
+- Create `cond --gpu-mode [integrated|discrete|hybrid|compute]`
+- Create `cond --gpu-status` - returns current mode
+- Write to `/sys/kernel/debug/vgaswitcheroo/switch` or use `optimus-manager` DBus
+- Support ASUS, System76, and some Lenovo laptops
+
+**Files to copy to cond source:**
+```
+cond/src/gpu/switch.rs
+cond/src/gpu/modes.rs
+```
+
+### 3.8 asusctl (ASUS ROG Specific)
+
+**Extract these files:**
+- `rog-aura/` - RGB keyboard control for ASUS
+- `rog-anime/` - AniMe Matrix display control
+- `rog-platform/` - platform-specific features
+- `asusd/src/fan.rs` - fan curve control (if not using fan-control)
+
+**Integrate into cond:**
+- Use only when hardware detection identifies ASUS ROG
+- RGB: `cond --rgb keyboard` uses ASUS Aura protocol
+- AniMe: `cond --anime [effect]` for compatible models
+- Create ASUS-specific command mapping in dispatcher
+
+**Files to copy to cond source:**
+```
+cond/src/vendor/asus/rgb.rs
+cond/src/vendor/asus/anime.rs
+```
+
+### 3.9 LenovoLegionLinux (Lenovo Legion Specific)
+
+**Extract these files:**
+- `legion_fan_control.c` - fan curve control
+- `legion_keyboard.c` - keyboard backlight control (non-RGB)
+
+**Integrate into cond:**
+- Use only when hardware detection identifies Lenovo Legion
+- Fan control: `cond --fan-profile` uses Legion ACPI interface
+- Keyboard backlight: `cond --kbd-backlight [0-255]`
+
+**Files to copy to cond source:**
+```
+cond/src/vendor/lenovo/fan.rs
+cond/src/vendor/lenovo/kbd.rs
+```
+
+### 3.10 system76-module (System76 Specific)
+
+**Extract these files:**
+- `src/fan.c` - fan control
+- `src/open_firmware.c` - firmware interface
+
+**Integrate into cond:**
+- Use only when hardware detection identifies System76
+- Fan control: `cond --fan-profile` uses system76-fan
+
+**Files to copy to cond source:**
+```
+cond/src/vendor/system76/fan.rs
+```
+
+## Phase 4: Hardware Detection System
+
+Create new detection module in `cond/src/detect/`:
+
+**Files to create:**
+```
+cond/src/detect/dmi.rs      # Read /sys/class/dmi/id/
+cond/src/detect/usb.rs      # Parse lsusb for vendor IDs
+cond/src/detect/pci.rs      # Parse lspci for GPU/chipset
+cond/src/detect/mod.rs      # Orchestrator
+```
+
+**Detection logic:**
+```rust
+// dmi.rs
+fn get_manufacturer() -> String {
+    read_file("/sys/class/dmi/id/sys_vendor")
+}
+
+fn get_product() -> String {
+    read_file("/sys/class/dmi/id/product_name")
+}
+
+// usb.rs - vendor ID mapping
+const VENDOR_ASUS: u16 = 0x0b05;
+const VENDOR_LENOVO: u16 = 0x17ef;
+const VENDOR_SYSTEM76: u16 = 0x3384;
+const VENDOR_RAZER: u16 = 0x1532;
+```
+
+## Phase 5: Vendor Dispatcher
+
+Create dispatcher in `cond/src/dispatcher.rs`:
+
+```rust
+fn detect_hardware() -> HardwareVendor {
+    let dmi = DMI::read();
+    match dmi.manufacturer.as_str() {
+        "ASUS" | "ASUSTeK COMPUTER INC." => {
+            if dmi.product.contains("ROG") {
+                HardwareVendor::AsusRog
+            } else {
+                HardwareVendor::Asus
+            }
+        }
+        "LENOVO" => {
+            if dmi.product.contains("Legion") {
+                HardwareVendor::LenovoLegion
+            } else {
+                HardwareVendor::Lenovo
+            }
+        }
+        "System76" => HardwareVendor::System76,
+        _ => HardwareVendor::Generic,
+    }
+}
+
+fn load_vendor_commands(vendor: HardwareVendor) {
+    match vendor {
+        HardwareVendor::AsusRog => {
+            // Register ASUS-specific command handlers
+            register_rgb_handler(asus_rgb_handler);
+            register_anime_handler(asus_anime_handler);
+        }
+        HardwareVendor::LenovoLegion => {
+            register_fan_handler(lenovo_fan_handler);
+            register_kbd_handler(lenovo_kbd_handler);
+        }
+        HardwareVendor::System76 => {
+            register_fan_handler(system76_fan_handler);
+        }
+        _ => {}
+    }
+}
+```
+
+## Phase 6: Cond Command Integration
+
+Add these new commands to `cond`'s CLI parser:
+
+```rust
+// In cond/src/main.rs
+enum Command {
+    // Power
+    BatteryMode { mode: BatteryMode },
+    PowerProfile { profile: PowerProfile },
+    
+    // Brightness
+    Brightness { value: BrightnessValue, device: Option<String> },
+    
+    // Audio
+    Volume { operation: VolumeOp },
+    SourceVolume { operation: VolumeOp },
+    
+    // Sensors
+    Sensors { watch: bool, format: OutputFormat },
+    
+    // Fan
+    FanProfile { profile: FanProfile },
+    FanCurve { cpu: Option<String>, gpu: Option<String> },
+    FanStatus,
+    
+    // RGB
+    Rgb { device: String, mode: RgbMode, color: Option<String>, speed: Option<String> },
+    
+    // GPU
+    GpuMode { mode: GpuMode },
+    GpuStatus,
+    
+    // Vendor-specific
+    Anime { effect: String },  // ASUS only
+    KbdBacklight { level: u8 }, // Lenovo only
+}
+```
+
+## Phase 7: Udev Rules for Permissions
+
+Create `/etc/udev/rules.d/99-cond-hardware.rules`:
+
+```bash
+# Backlight permissions
+SUBSYSTEM=="backlight", ACTION=="add", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod 664 /sys/class/backlight/%k/brightness"
+
+# LED permissions (for keyboard backlight)
+SUBSYSTEM=="leds", ACTION=="add", RUN+="/bin/chgrp input /sys/class/leds/%k/brightness", RUN+="/bin/chmod 664 /sys/class/leds/%k/brightness"
+
+# Power supply permissions (for battery thresholds)
+SUBSYSTEM=="power_supply", ACTION=="add", RUN+="/bin/chgrp power /sys/class/power_supply/%K/charge_control_end_threshold", RUN+="/bin/chmod 664 /sys/class/power_supply/%K/charge_control_end_threshold"
+
+# PWM fan permissions
+SUBSYSTEM=="hwmon", ACTION=="add", RUN+="/bin/chgrp video /sys/class/hwmon/%k/pwm*", RUN+="/bin/chmod 664 /sys/class/hwmon/%k/pwm*"
+```
+
+## Phase 8: Kb Topic Integration
+
+Publish hardware events to these kb topics:
+
+```
+# System events (published by udev)
+sys.power.ac [online|offline]
+sys.lid [open|closed]
+sys.display.external [connected|disconnected]
+
+# Sensor data (published every 2s)
+sys.sensors.temp.cpu
+sys.sensors.temp.gpu
+sys.sensors.fan.cpu
+sys.sensors.fan.gpu
+sys.sensors.voltage.core
+
+# Audio status (published on change)
+sys.audio.volume.sink
+sys.audio.mute.sink
+sys.audio.volume.source
+sys.audio.mute.source
+
+# GPU status
+sys.gpu.mode
+
+# Hardware ready
+hardware.ready [vendor]
+hardware.detected
+```
+
+## Phase 9: Profile System
+
+Create profile directory `~/.config/cond/profiles/` with JSON templates:
+
+**gaming.json:**
+```json
+{
+  "power_profile": "performance",
+  "battery_mode": "balanced",
+  "gpu_mode": "discrete",
+  "fan_profile": "performance",
+  "rgb": {"mode": "static", "color": "#ff0000"},
+  "brightness": 100,
+  "volume": 75
+}
+```
+
+**battery.json:**
+```json
+{
+  "power_profile": "power-saver",
+  "battery_mode": "max",
+  "gpu_mode": "integrated",
+  "fan_profile": "quiet",
+  "rgb": {"mode": "off"},
+  "brightness": 50,
+  "volume": 40
+}
+```
+
+**Command:** `cond --profile [name]` loads and applies all settings.
+
+## Phase 10: Build System
+
+Update `Makefile` in cond root:
+
+```makefile
+.PHONY: all vendor clean install
+
+all: vendor build
+
+vendor:
+	mkdir -p vendor
+	cd vendor && \
+	git clone https://github.com/wiiznokes/fan-control.git && \
+	git clone https://github.com/Hummer12007/brightnessctl.git && \
+	# ... (all other repos)
+
+build:
+	cargo build --release
+	# Compile schemas if any
+	glib-compile-schemas schemas/
+
+install:
+	install -Dm755 target/release/cond /usr/local/bin/cond
+	install -Dm755 target/release/kb /usr/local/bin/kb
+	install -Dm644 99-cond-hardware.rules /etc/udev/rules.d/
+	# Create config directories
+	mkdir -p /etc/cond /usr/share/cond
+	# Copy udev rules and helper scripts
+	cp -r resources/* /usr/share/cond/
+
+clean:
+	cargo clean
+	rm -rf vendor
+```
+
+## Phase 11: Final Directory Structure
+
+After implementation, your cond source tree should look like:
+
+```
+cond/
+├── Cargo.toml
+├── Makefile
+├── src/
+│   ├── main.rs
+│   ├── power/
+│   │   ├── battery.rs
+│   │   ├── profiles.rs
+│   │   └── rules.rs
+│   ├── brightness/
+│   │   ├── device.rs
+│   │   └── control.rs
+│   ├── audio/
+│   │   ├── sink.rs
+│   │   ├── source.rs
+│   │   └── wireplumber.rs
+│   ├── sensors/
+│   │   ├── temperature.rs
+│   │   ├── fan.rs
+│   │   ├── voltage.rs
+│   │   └── system.rs
+│   ├── fan/
+│   │   ├── control.rs
+│   │   ├── curve.rs
+│   │   └── profile.rs
+│   ├── rgb/
+│   │   ├── razer.rs
+│   │   ├── hid.rs
+│   │   └── effects.rs
+│   ├── gpu/
+│   │   ├── switch.rs
+│   │   └── modes.rs
+│   ├── vendor/
+│   │   ├── asus/
+│   │   │   ├── rgb.rs
+│   │   │   └── anime.rs
+│   │   ├── lenovo/
+│   │   │   ├── fan.rs
+│   │   │   └── kbd.rs
+│   │   └── system76/
+│   │       └── fan.rs
+│   ├── detect/
+│   │   ├── dmi.rs
+│   │   ├── usb.rs
+│   │   ├── pci.rs
+│   │   └── mod.rs
+│   └── dispatcher.rs
+├── vendor/ (all cloned repos)
+├── resources/
+│   ├── 99-cond-hardware.rules
+│   └── helper-scripts/
+├── profiles/
+│   ├── gaming.json
+│   ├── battery.json
+│   └── travel.json
+└── schemas/ (if any)
+```
+
+## Summary
+
+1. **Clone all 10 repositories** listed in Phase 2 into `vendor/`
+2. **Extract specific files** from each as listed in Phase 3
+3. **Integrate extracted code** into `cond/src/` following the directory structure above
+4. **Implement detection system** (Phase 4) reading DMI, USB, PCI
+5. **Implement dispatcher** (Phase 5) that loads vendor-specific commands
+6. **Add new CLI commands** (Phase 6) for all hardware control features
+7. **Create udev rules** (Phase 7) for device permissions
+8. **Set up kb topic publishing** (Phase 8) for events and sensor data
+9. **Create profile system** (Phase 9) for named configurations
+10. **Update Makefile** (Phase 10) to build everything
+
+The result will be a single binary `cond` that provides unified hardware control across ASUS, Lenovo, System76, and generic laptops, with zero external dependencies at runtime.

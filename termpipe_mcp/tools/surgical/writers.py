@@ -54,7 +54,7 @@ def register_tools(mcp):
         try:
             lines = read_file_lines(path)
             old_count = len(lines)
-            new_lines_in = content.split("\n")
+            new_lines_in = content.rstrip("\n").split("\n")
             line_number = max(0, min(line_number, len(lines)))
             old_copy = lines.copy()
             new_lines_list = lines[:line_number] + new_lines_in + lines[line_number:]
@@ -125,6 +125,7 @@ def register_tools(mcp):
                         f"🗑️ Would delete:\n{deleted_preview}\n\n"
                         f"File NOT modified.")
             
+            old_copy = list(lines)
             lines = new_lines_del
             atomic_write(path, lines)
             record_edit(path, "\n".join(old_copy), "\n".join(lines))
@@ -166,7 +167,7 @@ def register_tools(mcp):
                 return f"[Error: start_line {start_line} out of range (file has {old_count} lines)]"
             if end_line < start_line:
                 return "[Error: end_line must be >= start_line]"
-            new_lines_in = content.split("\n")
+            new_lines_in = content.rstrip("\n").split("\n")
             old_copy = lines.copy()
             old_replaced = end_line - start_line
             old_block = "\n".join(lines[start_line:end_line])

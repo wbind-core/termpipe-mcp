@@ -107,261 +107,104 @@ def _probe_http(url: str, timeout: float = 2.0) -> bool:
 
 
 def _auto_detect_backend():
-    """Defer to bootstrap.maybe_bootstrap() for provider detection."""
-    try:
-        from termpipe_mcp.bootstrap import maybe_bootstrap
-        maybe_bootstrap()
-    except Exception:
-        # Fallback: inline probe if bootstrap unavailable
-        if _probe_http("http://127.0.0.1:8743/health"):
-            _register_omniproxy()
-            return
-        if _probe_http("http://127.0.0.1:8421/health"):
-            _register_iflow()
-            return
-        if _probe_gemini_cli():
-            _register_gemini_cli()
-            return
+    """Register OpenRouter via ~/.omniproxy/keys.json as the reviewer backend."""
+    _register_openrouter()
 
 
-def _reviewer_tool_defs() -> list:
-    """Minimal tool set given to the reviewer model."""
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "Read the contents of a file.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "offset": {"type": "integer", "description": "Start line (0-based)"},
-                        "length": {"type": "integer", "description": "Max lines to read"},
-                    },
-                    "required": ["path"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "find_in_file",
-                "description": "Search for a pattern in a file and return matching lines with context.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "pattern": {"type": "string"},
-                        "max_matches": {"type": "integer", "default": 20},
-                        "context": {"type": "integer", "default": 2},
-                    },
-                    "required": ["path", "pattern"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_lines",
-                "description": "Read a specific line range from a file.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "start_line": {"type": "integer"},
-                        "end_line": {"type": "integer"},
-                    },
-                    "required": ["path", "start_line"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "smart_replace",
-                "description": "Replace a unique string in a file with new text.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "old_text": {"type": "string"},
-                        "new_text": {"type": "string"},
-                    },
-                    "required": ["path", "old_text", "new_text"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "write_file",
-                "description": "Write content to a file, replacing it entirely.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "content": {"type": "string"},
-                    },
-                    "required": ["path", "content"],
-                },
-            },
-        },
-    ]
+def _register_openrouter(model: str = None):
+    """Register OpenRouter as the reviewer backend via ~/.omniproxy/keys.json."""
+    import json
+    import random
+    import httpx
+    from pathlib import Path
 
+    def _load_keys():
+        for p in [Path.home() / ".omniproxy" / "keys.json",
+                  Path.home() / ".termpipe-mcp" / "keys.json",
+                  Path.home() / ".termpipe" / "keys.json"]:
+            if p.exists():
+                try:
+                    data = json.loads(p.read_text())
+                    if data:
+                        return data
+                except Exception:
+                    pass
+        return {}
 
-def _call_termcp(tool_name: str, args: dict) -> str:
-    """Execute a tool via OmniProxy Tool Server (port 8422, per-category endpoints)."""
-    import httpx, json, os
+    def _load_models():
+        for p in [Path.home() / ".omniproxy" / "models01.json",
+                  Path.home() / ".termpipe-mcp" / "models.json"]:
+            if p.exists():
+                try:
+                    data = json.loads(p.read_text())
+                    if data:
+                        return [m.split(":", 1)[1] if ":" in m else m for m in data]
+                except Exception:
+                    pass
+        return ["qwen/qwen3-coder:free"]
 
-    _ROUTE: dict[str, str] = {
-        "read_file":    "/tools/files",
-        "write_file":   "/tools/files",
-        "find_in_file": "/tools/files",
-        "read_lines":   "/tools/files",
-        "smart_replace": "/tools/files",
-    }
-    TOOL_SERVER = os.environ.get("OMNIPROXY_TOOL_SERVER_URL", "http://localhost:8422")
-    endpoint = _ROUTE.get(tool_name, f"/tools/files")  # reviewer only uses file tools
-    try:
-        resp = httpx.post(
-            f"{TOOL_SERVER}{endpoint}",
-            json={"tool": tool_name, "args": args},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("error"):
-            return f"[Tool error: {data['error']}]"
-        return data.get("result", "")
-    except Exception as e:
-        return f"[Tool server error: {e}]"
+    keys = _load_keys()
+    api_key = keys.get("openrouter", "")
+    use_model = model or random.choice(_load_models())
 
-
-def _agentic_review(prompt: str, model: str, timeout: float,
-                    omniproxy_url: str = "http://127.0.0.1:8743") -> str:
-    """
-    Run an agentic loop against omniproxy with TermPipe tools attached.
-    The model can read and write files to fix issues it finds.
-    Returns the final text response.
-    """
-    import httpx, json
-
-    tool_defs = _reviewer_tool_defs()
-    messages = [{"role": "user", "content": prompt}]
-    MAX_TURNS = 8
-    deadline = timeout  # per-request timeout, not wall-clock total
-
-    client = httpx.Client(timeout=deadline)
-    try:
-        for _ in range(MAX_TURNS):
+    def _fn(prompt: str, timeout: float) -> str:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": use_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 800,
+            "temperature": 0.0,
+        }
+        with httpx.Client(timeout=timeout) as client:
             resp = client.post(
-                f"{omniproxy_url}/v1/chat/completions",
-                json={
-                    "model": model,
-                    "provider": "auto",
-                    "messages": messages,
-                    "tools": tool_defs,
-                    "tool_choice": "auto",
-                    "max_tokens": 800,
-                    "temperature": 0.0,
-                },
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=payload,
             )
             resp.raise_for_status()
             data = resp.json()
-            choice = data["choices"][0]
-            message = choice["message"]
-            finish_reason = choice.get("finish_reason")
+            return data["choices"][0]["message"]["content"].strip()
 
-            messages.append(message)
-
-            if finish_reason == "tool_calls":
-                for tc in message.get("tool_calls", []):
-                    fn = tc["function"]
-                    try:
-                        args = json.loads(fn["arguments"])
-                    except json.JSONDecodeError:
-                        args = {}
-                    result = _call_termcp(fn["name"], args)
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result,
-                    })
-                continue
-
-            # stop / length / other — return the text
-            return (message.get("content") or "").strip()
-
-        return "[reviewer: max turns reached]"
-    finally:
-        client.close()
+    register_reviewer("openrouter", _fn)
 
 
-def _register_omniproxy(url: str = "http://127.0.0.1:8743", model: str = "qwen3-coder-plus"):
-    """Register omniproxy agentic reviewer (tools-capable)."""
+def _register_groq(model: str = "llama-3.1-8b-instant"):
+    """Register Groq as the reviewer backend via HTTP API."""
+    import json
+    import httpx
+    from pathlib import Path
+
+    keys_file = Path.home() / ".termpipe" / "keys.json"
+    keys = json.loads(keys_file.read_text())
+    api_key = keys.get("groq", "")
 
     def _fn(prompt: str, timeout: float) -> str:
-        return _agentic_review(prompt, model=model, timeout=timeout, omniproxy_url=url)
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 800,
+            "temperature": 0.0,
+        }
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"].strip()
 
-    register_reviewer("omniproxy", _fn)
-
-
-def _register_iflow(model: str = "qwen3-coder-plus"):
-    """Fallback: omniproxy text-only review (no agentic tool loop)."""
-    from termpipe_mcp.tools.surgical.helpers import omniproxy_query
-
-    def _fn(prompt: str, timeout: float) -> str:
-        return omniproxy_query(
-            prompt,
-            model=model,
-            max_tokens=600,
-            temperature=0.0,
-            timeout=int(timeout),
-        )
-
-    register_reviewer("iflow", _fn)
-
-
-def _probe_gemini_cli() -> bool:
-    """Return True if `gemini` binary is on PATH."""
-    import shutil
-    return shutil.which("gemini") is not None
+    register_reviewer("groq", _fn)
 
 
-def _register_gemini_cli(model: str = "gemini-2.5-flash"):
-    """Register gemini CLI subprocess as the reviewer backend."""
-    import subprocess
-    import json as _json
-
-    def _fn(prompt: str, timeout: float) -> str:
-        result = subprocess.run(
-            ["gemini", "-p", prompt, "-o", "stream-json", "-m", model],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        # Parse stream-json: find the assistant message
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = _json.loads(line)
-                if obj.get("type") == "message" and obj.get("role") == "assistant":
-                    content = obj.get("content", "")
-                    # content may be a string or list of parts
-                    if isinstance(content, list):
-                        return "".join(
-                            p.get("text", "") for p in content
-                            if isinstance(p, dict)
-                        ).strip()
-                    return str(content).strip()
-            except _json.JSONDecodeError:
-                continue
-        raise RuntimeError(f"gemini CLI gave no assistant message. stdout={result.stdout[:200]}")
-
-    register_reviewer("gemini-cli", _fn)
 
 
 # ---------------------------------------------------------------------------

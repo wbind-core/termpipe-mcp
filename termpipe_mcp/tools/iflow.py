@@ -8,7 +8,7 @@ from typing import Optional
 from termpipe_mcp.helpers import api_get, get_iflow_credentials
 
 # Global model state
-_iflow_model = "qwen3-coder-plus"
+_iflow_model = "qwen/qwen3-coder:free"
 
 
 async def iflow_query_async(
@@ -171,7 +171,7 @@ def register_tools(mcp):
             key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
         except:
             has_key = False
-            api_base = "https://apis.iflow.cn/v1"
+            api_base = "http://127.0.0.1:8743/v1"
             key_preview = "Not configured"
         
         health = api_get("/health")

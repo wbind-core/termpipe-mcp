@@ -7,33 +7,89 @@ Includes: file I/O, diff generation, fuzzy matching, line-delta summary,
 from pathlib import Path
 from typing import Optional, Tuple
 import difflib
+import json
 import os
+import random
+import shutil
+import subprocess
 import tempfile
+import threading
+import time
 
-OMNIPROXY_URL = os.environ.get("OMNIPROXY_URL", "http://127.0.0.1:8743")
+import httpx
 
 
-def omniproxy_query(prompt: str, model: str = "qwen3-coder-plus",
+# ---------------------------------------------------------------------------
+# ~/.omniproxy integration — canonical key + model source
+# ---------------------------------------------------------------------------
+
+def _load_api_keys() -> dict:
+    """Load API keys — ~/.omniproxy/keys.json first, fallback ~/.termpipe-mcp/keys.json"""
+    for p in [Path.home() / ".omniproxy" / "keys.json",
+              Path.home() / ".termpipe-mcp" / "keys.json"]:
+        if p.exists():
+            try:
+                data = json.loads(p.read_text())
+                if data:
+                    return data
+            except Exception:
+                pass
+    return {}
+
+
+def _load_models() -> list:
+    """Load models — ~/.omniproxy/models01.json first, fallback ~/.termpipe-mcp/models.json"""
+    for p in [Path.home() / ".omniproxy" / "models01.json",
+              Path.home() / ".termpipe-mcp" / "models.json"]:
+        if p.exists():
+            try:
+                data = json.loads(p.read_text())
+                if data:
+                    # Strip provider prefix e.g. "openrouter:qwen/..." -> "qwen/..."
+                    return [m.split(":", 1)[1] if ":" in m else m for m in data]
+            except Exception:
+                pass
+    return ["qwen/qwen3-coder:free"]
+
+
+def _call_openrouter(prompt: str, model: str = None, timeout: float = 30.0) -> Optional[str]:
+    """Call OpenRouter directly using ~/.omniproxy/keys.json."""
+    keys = _load_api_keys()
+    api_key = keys.get("openrouter")
+    if not api_key:
+        return None
+    if not model:
+        model = random.choice(_load_models())
+    try:
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post("https://openrouter.ai/api/v1/chat/completions",
+                               headers=headers, json=payload)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"[OpenRouter error: {e}]"
+
+
+def llm_query(prompt: str, model: str = None,
+              max_tokens: int = 500, temperature: float = 0.2,
+              timeout: int = 30, rotate: bool = True) -> str:
+    """Call OpenRouter directly using ~/.omniproxy/keys.json + models01.json."""
+    result = _call_openrouter(prompt, model=model, timeout=timeout)
+    if result:
+        return result
+    return "[Error: OpenRouter call failed — check ~/.omniproxy/keys.json]"
+
+
+def omniproxy_query(prompt: str, model: str = None,
                     max_tokens: int = 500, temperature: float = 0.2,
                     timeout: int = 30) -> str:
-    """Send a completion request through omniproxy. Never calls iflow directly."""
-    import httpx
-    try:
-        resp = httpx.post(
-            f"{OMNIPROXY_URL}/v1/chat/completions",
-            json={
-                "model": model,
-                "provider": "auto",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            },
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"[Error: {e}]"
+    """Legacy alias for llm_query()."""
+    return llm_query(prompt, model=model, timeout=timeout)
+
+
+_llm_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +184,7 @@ def line_delta_summary(old_count: int, new_count: int, edit_start: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# AI error analysis (iflow)
+# AI error analysis
 # ---------------------------------------------------------------------------
 
 def ai_analyze_error(error_type: str, context: dict) -> str:
@@ -144,26 +200,17 @@ def ai_analyze_error(error_type: str, context: dict) -> str:
                        f"Lines: {context.get('match_lines', [])}. "
                        f"Text: {context.get('searched_for', '')[:100]}\n")
         prompt += "\nRespond:\n❌ PROBLEM: [one sentence]\n✅ FIX: [one sentence]"
-        return omniproxy_query(prompt, model="qwen3-coder-plus", max_tokens=150, temperature=0.1)
+        return omniproxy_query(prompt, max_tokens=150)
     except Exception:
         return ""
 
 
-
-
-
 # ---------------------------------------------------------------------------
-# Undo support - Multi-level edit history
+# Undo support — multi-level edit history
 # ---------------------------------------------------------------------------
 
-import time
-import threading
-
-# Thread-safe edit history stack (not persisted across restarts)
 _edit_stack: list[dict] = []
 _stack_lock = threading.Lock()
-
-# Maximum history size
 MAX_HISTORY = 50
 
 
@@ -178,101 +225,71 @@ def record_edit(path: str, old_content: str, new_content: str) -> None:
             "line_count": len(new_content.split("\n")),
         }
         _edit_stack.append(entry)
-        # Trim to max size
         while len(_edit_stack) > MAX_HISTORY:
             _edit_stack.pop(0)
 
 
 def get_edit_history() -> list[dict]:
-    """Get the full edit history stack."""
     with _stack_lock:
         return list(_edit_stack)
 
 
 def get_edit_count() -> int:
-    """Get number of edits in history."""
     with _stack_lock:
         return len(_edit_stack)
 
 
 def undo_last_edit(n: int = 1) -> str:
-    """
-    Undo the last N edits using git checkout.
-    
-    Returns a message describing what was undone.
-    Requires the file to be in a git repository.
-    """
     global _edit_stack
-    
     with _stack_lock:
         if not _edit_stack:
             return "[Error] No edits to undo. You haven't made any edits in this session."
-        
         n = min(n, len(_edit_stack))
-        # Get the N most recent edits (we'll undo in reverse order)
         edits_to_undo = _edit_stack[-n:]
-    
-    # Process undos - restore to the state BEFORE the oldest edit in the batch
-    # To do this properly: get the state at the edit BEFORE the oldest we're undoing
+
     oldest_edit = edits_to_undo[0]
     path = oldest_edit["path"]
     p = Path(path)
-    
+
     if not p.exists():
         return f"[Error] File no longer exists: {path}"
-    
-    # Check if in a git repo
+
     try:
-        import subprocess
         result = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=p.parent,
-            capture_output=True,
-            text=True,
+            cwd=p.parent, capture_output=True, text=True,
         )
         if result.returncode != 0 or result.stdout.strip() != "true":
             return f"[Error] File is not in a git repository: {path}"
     except Exception as e:
         return f"[Error] Cannot check git status: {e}"
-    
-    # Find the edit BEFORE the oldest we're undoing to get target state
+
     with _stack_lock:
         idx = _edit_stack.index(oldest_edit)
-        if idx > 0:
-            target_old = _edit_stack[idx - 1]["old_content"]
-        else:
-            # No prior edit - restore to git HEAD
-            target_old = None
-    
-    # Try to undo via git to the state before our edits
+        target_old = _edit_stack[idx - 1]["old_content"] if idx > 0 else None
+
     try:
         if target_old is not None:
-            # Write the pre-edit content directly
             p.write_text(target_old)
         else:
-            # Restore from git HEAD
             result = subprocess.run(
                 ["git", "checkout", "HEAD", "--", str(p.name)],
-                cwd=p.parent,
-                capture_output=True,
-                text=True,
+                cwd=p.parent, capture_output=True, text=True,
             )
             if result.returncode != 0:
                 return f"[Error] Git checkout failed: {result.stderr}"
-        
-        # Remove the undone edits from history
+
         with _stack_lock:
             for _ in range(n):
                 if _edit_stack:
                     _edit_stack.pop()
-        
+
         return f"✅ Undo successful: reverted {p.name} by {n} edit(s)\nℹ️  Restored to state before your edits."
     except Exception as e:
         return f"[Error] Undo failed: {e}"
 
 
 def clear_history() -> str:
-    """Clear the edit history."""
     global _edit_stack
     with _stack_lock:
         count = len(_edit_stack)
@@ -281,6 +298,5 @@ def clear_history() -> str:
 
 
 def get_last_edit() -> Optional[dict]:
-    """Get info about the last edit for display purposes."""
     with _stack_lock:
         return _edit_stack[-1] if _edit_stack else None

@@ -9,26 +9,12 @@ from pathlib import Path
 
 
 def _gemini_query(prompt: str, timeout: int = 60) -> str:
-    """Query Gemini CLI with a prompt."""
+    """Query Gemini context using the OpenRouter multi-key integration."""
+    from termpipe_mcp.tools.surgical.helpers import llm_query
     try:
-        result = subprocess.run(
-            ["gemini", "-o", "text", prompt],
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
-        
-        if result.returncode == 0:
-            return result.stdout.strip()
-        else:
-            return f"[Gemini error: {result.stderr.strip()}]"
-            
-    except subprocess.TimeoutExpired:
-        return f"[Gemini timeout after {timeout}s]"
-    except FileNotFoundError:
-        return "[Gemini CLI not installed. Install with: npm install -g @anthropic/gemini-cli]"
+        return llm_query(prompt, model="gemini_fallback", timeout=timeout)
     except Exception as e:
-        return f"[Gemini error: {e}]"
+        return f"[OpenRouter query error: {e}]"
 
 
 def register_tools(mcp):
@@ -44,7 +30,7 @@ def register_tools(mcp):
         """
         Gemini-powered debugging assistant — second opinion via Gemini CLI subprocess.
 
-        Calls the local `gemini` CLI binary directly (not omniproxy). Use this
+        Calls the local `gemini` CLI binary directly (not openrouter). Use this
         when you want a completely different model's perspective on a problem.
 
         Use gemini_debug when:
@@ -56,7 +42,7 @@ def register_tools(mcp):
           • You need a fast first response — debug_assist is always available
           • Gemini CLI is not installed
           • You want tool call history included (gemini_debug supports it too,
-            but debug_assist integrates more tightly with the omniproxy stack)
+            but debug_assist integrates more tightly with the openrouter stack)
 
         Requires: `gemini` CLI installed and authenticated.
 

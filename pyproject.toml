@@ -26,20 +26,16 @@ classifiers = [
 dependencies = [
     # MCP Framework
     "fastmcp>=0.1.0",
-    
     # FastAPI Server Components
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
     "pydantic>=2.5.0",
-    
     # HTTP Client
     "httpx>=0.26.0",
     "requests>=2.31.0",
-    
     # Async Support
     "aiohttp>=3.9.0",
     "aiofiles>=23.2.0",
-    
     # Additional Dependencies
     "python-multipart>=0.0.6",
 ]
