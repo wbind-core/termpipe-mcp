@@ -35,6 +35,7 @@ from .helpers import (
     get_edit_history, get_edit_count, record_edit,
 )
 from .reviewer import pre_commit_gate
+from .workspace_gate import workspace_gate, workspace_gate_consume, workspace_gate_checkpoint
 import os
 import tempfile
 
@@ -68,6 +69,9 @@ def register_tools(mcp):
                            Returns a diff preview. Default: False.
         """
         try:
+            block = workspace_gate(path)
+            if block:
+                return block
             lines = read_file_lines(path)
             content = "\n".join(lines)
 
@@ -124,6 +128,8 @@ def register_tools(mcp):
                         return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
                     atomic_write(path, new_lines)
                     record_edit(path, "\n".join(lines), "\n".join(new_lines))
+                    workspace_gate_consume(path)
+                    cp = workspace_gate_checkpoint(path)
                     diff = generate_diff(lines, new_lines)
                     edit_end = expected_line + len(new_text.split("\n"))
                     out = (f"✅ Replaced occurrence at line {expected_line}\n"
@@ -131,7 +137,7 @@ def register_tools(mcp):
                            f"```diff\n{diff}\n```")
                     if rev.note:
                         out += f"\n🤖 reviewer: {rev.note}"
-                    return out
+                    return f"{out}{cp}"
                 else:
                     out = f"[Ambiguous: {occ_count} occurrences on lines: {occ_lines[:10]}]\n"
                     out += "💡 Rerun with expected_line=<N> to target one.\n"
@@ -174,12 +180,14 @@ def register_tools(mcp):
                 return f"🚫 Write blocked: reviewer identified an error but failed to commit the fix.\n🤖 {rev.note}"
             atomic_write(path, new_lines)
             record_edit(path, "\n".join(lines), "\n".join(new_lines))
+            workspace_gate_consume(path)
+            cp = workspace_gate_checkpoint(path)
             edit_end = start_line_no + len(new_text.split("\n"))
             diff = generate_diff(lines, new_lines)
             out = (f"✅ Replaced at line {start_line_no}\n"
                    f"{line_delta_summary(old_count, len(new_lines), start_line_no)}\n\n"
                    f"```diff\n{diff}\n```")
-            return out
+            return f"{out}{cp}"
 
         except Exception as e:
             return f"[Error: {e}]"
@@ -199,6 +207,9 @@ def register_tools(mcp):
                         When omitted, removes strict consecutive duplicates only.
         """
         try:
+            block = workspace_gate(path)
+            if block:
+                return block
             lines = read_file_lines(path)
             old_count = len(lines)
             if start_line < 0 or start_line >= old_count:
@@ -226,14 +237,46 @@ def register_tools(mcp):
             lines = prefix + processed + suffix
             atomic_write(path, lines)
             record_edit(path, "\n".join(old_copy), "\n".join(lines))
+            workspace_gate_consume(path)
+            cp = workspace_gate_checkpoint(path)
             removed = len(target) - len(processed)
             diff = generate_diff(old_copy, lines)
             out = (f"✅ Removed {removed} duplicate(s)\n"
                    f"{line_delta_summary(old_count, len(lines), start_line)}\n\n"
                    f"```diff\n{diff}\n```")
-            return out
+            return f"{out}{cp}"
         except Exception as e:
             return f"[Error: {e}]"
+
+    @mcp.tool()
+    def undo(n: int = 1) -> str:
+        """
+        Undo the last N edits.
+
+        By default undoes the last edit. Use n=N to undo N edits.
+
+        Args:
+            n: Number of edits to undo (default: 1)
+        """
+        return undo_last_edit(n=n)
+
+    @mcp.tool()
+    def history() -> str:
+        """
+        Show edit history for this session.
+
+        Returns the list of edits made in this session with timestamps.
+        """
+        import time
+        count = get_edit_count()
+        if count == 0:
+            return "No edits in session history."
+        edits = get_edit_history()
+        out = [f"📜 Edit History ({count} edits):"]
+        for i, e in enumerate(reversed(edits), 1):
+            ts = time.strftime("%H:%M:%S", time.localtime(e.get("timestamp", 0)))
+            out.append(f"  {i}. {e['path'].split('/')[-1]} @ {ts} ({e.get('line_count', '?')} lines)")
+        return "\n".join(out)
 
 
 def _remove_basic_duplicates(lines: list[str]) -> list[str]:
@@ -244,40 +287,4 @@ def _remove_basic_duplicates(lines: list[str]) -> list[str]:
         if line != result[-1]:
             result.append(line)
     return result
-
-
-
-    @mcp.tool()
-    def undo(n: int = 1) -> str:
-        """
-        Undo the last N edits.
-        
-        By default undoes the last edit. Use n=N to undo N edits.
-        Uses git to restore file to state before your edits.
-        
-        Args:
-            n: Number of edits to undo (default: 1)
-        """
-        return undo_last_edit(n=n)
-
-    @mcp.tool()
-    def history() -> str:
-        """
-        Show edit history for this session.
-        
-        Returns the list of edits made in this session with timestamps.
-        """
-        import time
-        
-        count = get_edit_count()
-        if count == 0:
-            return "No edits in session history."
-        
-        edits = get_edit_history()
-        lines = [f"📜 Edit History ({count} edits):"]
-        for i, e in enumerate(reversed(edits), 1):
-            ts = time.strftime("%H:%M:%S", time.localtime(e.get("timestamp", 0)))
-            lines.append(f"  {i}. {e['path'].split('/')[-1]} @ {ts} ({e.get('line_count', '?')} lines)")
-        
-        return "\n".join(lines)
 

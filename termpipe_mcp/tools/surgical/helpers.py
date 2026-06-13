@@ -9,77 +9,38 @@ from typing import Optional, Tuple
 import difflib
 import json
 import os
-import random
+
 import shutil
-import subprocess
 import tempfile
 import threading
-import time
 
 import httpx
 
 
 # ---------------------------------------------------------------------------
-# ~/.omniproxy integration — canonical key + model source
+# LLM query — always routes to omniproxy local (port 9916)
 # ---------------------------------------------------------------------------
 
-def _load_api_keys() -> dict:
-    """Load API keys — ~/.omniproxy/keys.json first, fallback ~/.termpipe-mcp/keys.json"""
-    for p in [Path.home() / ".omniproxy" / "keys.json",
-              Path.home() / ".termpipe-mcp" / "keys.json"]:
-        if p.exists():
-            try:
-                data = json.loads(p.read_text())
-                if data:
-                    return data
-            except Exception:
-                pass
-    return {}
-
-
-def _load_models() -> list:
-    """Load models — ~/.omniproxy/models01.json first, fallback ~/.termpipe-mcp/models.json"""
-    for p in [Path.home() / ".omniproxy" / "models01.json",
-              Path.home() / ".termpipe-mcp" / "models.json"]:
-        if p.exists():
-            try:
-                data = json.loads(p.read_text())
-                if data:
-                    # Strip provider prefix e.g. "openrouter:qwen/..." -> "qwen/..."
-                    return [m.split(":", 1)[1] if ":" in m else m for m in data]
-            except Exception:
-                pass
-    return ["qwen/qwen3-coder:free"]
-
-
-def _call_openrouter(prompt: str, model: str = None, timeout: float = 30.0) -> Optional[str]:
-    """Call OpenRouter directly using ~/.omniproxy/keys.json."""
-    keys = _load_api_keys()
-    api_key = keys.get("openrouter")
-    if not api_key:
-        return None
-    if not model:
-        model = random.choice(_load_models())
-    try:
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.post("https://openrouter.ai/api/v1/chat/completions",
-                               headers=headers, json=payload)
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"[OpenRouter error: {e}]"
+_OMNI_URL = "http://127.0.0.1:9920/v1/chat/completions"
 
 
 def llm_query(prompt: str, model: str = None,
               max_tokens: int = 500, temperature: float = 0.2,
               timeout: int = 30, rotate: bool = True) -> str:
-    """Call OpenRouter directly using ~/.omniproxy/keys.json + models01.json."""
-    result = _call_openrouter(prompt, model=model, timeout=timeout)
-    if result:
-        return result
-    return "[Error: OpenRouter call failed — check ~/.omniproxy/keys.json]"
+    """Query omniproxy local endpoint at 9916."""
+    payload = {
+        "model": "",
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(_OMNI_URL, json=payload)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return "[Error: omniproxy not available — run 'omni serve --local']"
+    except Exception as e:
+        return f"[Error: {type(e).__name__}: {e}]"
 
 
 def omniproxy_query(prompt: str, model: str = None,
@@ -87,7 +48,6 @@ def omniproxy_query(prompt: str, model: str = None,
                     timeout: int = 30) -> str:
     """Legacy alias for llm_query()."""
     return llm_query(prompt, model=model, timeout=timeout)
-
 
 _llm_lock = threading.Lock()
 
@@ -206,97 +166,66 @@ def ai_analyze_error(error_type: str, context: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Undo support — multi-level edit history
+# Undo support — backed by telemetry.db edit_history
 # ---------------------------------------------------------------------------
 
-_edit_stack: list[dict] = []
-_stack_lock = threading.Lock()
-MAX_HISTORY = 50
-
-
-def record_edit(path: str, old_content: str, new_content: str) -> None:
+def record_edit(path: str, old_content: str, new_content: str, cwd: Optional[str] = None) -> None:
     """Record an edit for potential undo. Called by writers after successful writes."""
-    with _stack_lock:
-        entry = {
-            "path": str(Path(path).expanduser().resolve()),
-            "old_content": old_content,
-            "new_content": new_content,
-            "timestamp": time.time(),
-            "line_count": len(new_content.split("\n")),
-        }
-        _edit_stack.append(entry)
-        while len(_edit_stack) > MAX_HISTORY:
-            _edit_stack.pop(0)
+    import traceback as _tb
+    from termpipe_mcp.telemetry import record_edit_to_db, _get_session_id
+    frame = _tb.extract_stack()
+    tool_name = "unknown"
+    for f in reversed(frame):
+        if f.name not in ("record_edit", "<module>") and not f.name.startswith("_"):
+            tool_name = f.name
+            break
+    record_edit_to_db(
+        tool_name=tool_name,
+        path=path,
+        old_content=old_content,
+        new_content=new_content,
+        cwd=cwd or os.getcwd(),
+    )
 
 
 def get_edit_history() -> list[dict]:
-    with _stack_lock:
-        return list(_edit_stack)
+    from termpipe_mcp.telemetry import get_edit_history_db, _get_session_id
+    return get_edit_history_db(_get_session_id())
 
 
 def get_edit_count() -> int:
-    with _stack_lock:
-        return len(_edit_stack)
+    from termpipe_mcp.telemetry import get_edit_history_db, _get_session_id
+    rows = get_edit_history_db(_get_session_id(), limit=1000)
+    return len(rows)
 
 
 def undo_last_edit(n: int = 1) -> str:
-    global _edit_stack
-    with _stack_lock:
-        if not _edit_stack:
-            return "[Error] No edits to undo. You haven't made any edits in this session."
-        n = min(n, len(_edit_stack))
-        edits_to_undo = _edit_stack[-n:]
+    from termpipe_mcp.telemetry import get_undo_edits, _get_session_id
+    session_id = _get_session_id()
+    edits = get_undo_edits(session_id, n)
+    if not edits:
+        return "[Error] No edits to undo in this session."
 
-    oldest_edit = edits_to_undo[0]
-    path = oldest_edit["path"]
+    # The oldest of the N edits holds the content we want to restore to
+    oldest = edits[-1]
+    path = oldest["path"]
     p = Path(path)
 
     if not p.exists():
         return f"[Error] File no longer exists: {path}"
 
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=p.parent, capture_output=True, text=True,
-        )
-        if result.returncode != 0 or result.stdout.strip() != "true":
-            return f"[Error] File is not in a git repository: {path}"
-    except Exception as e:
-        return f"[Error] Cannot check git status: {e}"
-
-    with _stack_lock:
-        idx = _edit_stack.index(oldest_edit)
-        target_old = _edit_stack[idx - 1]["old_content"] if idx > 0 else None
-
-    try:
-        if target_old is not None:
-            p.write_text(target_old)
-        else:
-            result = subprocess.run(
-                ["git", "checkout", "HEAD", "--", str(p.name)],
-                cwd=p.parent, capture_output=True, text=True,
-            )
-            if result.returncode != 0:
-                return f"[Error] Git checkout failed: {result.stderr}"
-
-        with _stack_lock:
-            for _ in range(n):
-                if _edit_stack:
-                    _edit_stack.pop()
-
-        return f"✅ Undo successful: reverted {p.name} by {n} edit(s)\nℹ️  Restored to state before your edits."
+        p.write_text(oldest["old_content"])
+        return f"✅ Undo successful: reverted {p.name} by {n} edit(s)\nℹ️  Restored to state before edit #{oldest['id']}."
     except Exception as e:
         return f"[Error] Undo failed: {e}"
 
 
 def clear_history() -> str:
-    global _edit_stack
-    with _stack_lock:
-        count = len(_edit_stack)
-        _edit_stack.clear()
-    return f"✅ Cleared {count} edit(s) from history"
+    rows = get_edit_history_db(_get_session_id(), limit=1000)
+    return f"✅ {len(rows)} edit(s) in session history (DB-backed; use SQL to purge if needed)"
 
 
 def get_last_edit() -> Optional[dict]:
-    with _stack_lock:
-        return _edit_stack[-1] if _edit_stack else None
+    edits = get_undo_edits(_get_session_id(), 1)
+    return edits[0] if edits else None

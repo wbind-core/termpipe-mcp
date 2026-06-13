@@ -54,9 +54,9 @@ def _upsert_artifact(
 
 def workspace_resume(cwd: str) -> None:
     """
-    Side-effect of list_tools. Announces active workspace and republishes
-    all current artifacts to their bus topics. Zero-cost if bus is down or
-    workspace is unknown.
+    Side-effect of list_tools. Announces active workspace, republishes
+    all current artifacts to their bus topics, and backfills any missing
+    workspace.state.json files. Zero-cost if bus is down or workspace unknown.
     """
     ws_id = _registry_ws_id(cwd)
     if not ws_id:
@@ -93,7 +93,7 @@ def workspace_resume(cwd: str) -> None:
 
     _bus_pub(_TOPIC_INIT, json.dumps(init_payload), mime="application/json")
 
-    for art in _db_list_artifacts(ws_id):
+    for art in artifacts:
         row = _db_read_artifact(ws_id, art["name"])
         if not row:
             continue
@@ -113,4 +113,10 @@ def workspace_resume(cwd: str) -> None:
         })
         _bus_pub(topic, payload, mime="application/json")
 
-
+    # Backfill missing workspace.state.json files — fire-and-forget
+    try:
+        from ._state import backfill_all_states
+        import threading
+        threading.Thread(target=backfill_all_states, daemon=True).start()
+    except Exception:
+        pass

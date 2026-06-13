@@ -23,6 +23,7 @@ _TOPIC_TASK        = "termpipe.workspace.task"
 _TOPIC_INIT        = "termpipe.workspace.init"  # omniproxys subscribe here
 _TOPIC_PLAN        = "termpipe.workspace.plan"
 _TOPIC_WALKTHROUGH = "termpipe.workspace.walkthrough"
+_TOPIC_HB          = "lms.daemon.heartbeat"
 
 # Artifact type constants (mirrors Antigravity metadata)
 ATYPE_TASK  = "ARTIFACT_TYPE_TASK"
@@ -86,22 +87,78 @@ def _bus_get(topic: str) -> str | None:
     return None
 
 
-def _bus_poll(topics: list[str], timeout_ms: int = 180000) -> tuple[str, str] | None:
+def _bus_get_multi(topics: list[str]) -> dict[str, str]:
+    """
+    Get the latest message for multiple topics in a single call.
+    Returns a dict mapping topic name to its latest message data.
+    """
+    if not topics:
+        return {}
+    try:
+        msg = json.dumps({"op": "get", "topics": topics}) + "\n"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(2.0)
+            s.connect(str(_KC_SOCK))
+            s.sendall(msg.encode())
+            buf = b""
+            while True:
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                if b"\n" in buf:
+                    break
+        r = json.loads(buf.split(b"\n")[0])
+        if r.get("ok") and r.get("messages"):
+            return {m["topic"]: m["data"] for m in r["messages"] if "topic" in m and "data" in m}
+    except Exception:
+        pass
+    return {}
+
+
+def _bus_get_pattern(pattern: str) -> dict[str, str]:
+    """
+    Get the latest messages for all topics matching the glob pattern.
+    Returns a dict mapping topic name to its latest message data.
+    """
+    import fnmatch
+    # 1. Get all active topics
+    r = _bus_send("topics", "", "")
+    if not (r and r.get("ok") and r.get("topics")):
+        return {}
+    
+    # 2. Filter with pattern
+    matched = fnmatch.filter(r["topics"], pattern)
+    if not matched:
+        return {}
+    
+    # 3. Batch get
+    return _bus_get_multi(matched)
+
+
+def _bus_poll(topics: list[str], timeout_ms: int = 45000) -> tuple[str, str] | None:
     """
     Block until any of the given topics receives a new message.
     Returns (topic, data) or None on timeout.
-    Uses sequential polling with short waits — avoids needing multi-socket select.
+    
+    This implementation uses 'sub' (streaming) to wait for the next message.
     """
     import time
-    # Snapshot current seq for each topic so we only catch NEW messages
-    seqs: dict[str, int] = {}
-    for t in topics:
+    if not topics:
+        return None
+    
+    # For multiple topics, we'd need multiple sockets or a pattern.
+    # If it's just one topic, we can do it simply.
+    if len(topics) == 1:
+        t = topics[0]
         try:
-            msg = json.dumps({"op": "get", "topic": t}) + "\n"
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                s.settimeout(2.0)
+                s.settimeout(timeout_ms / 1000.0)
                 s.connect(str(_KC_SOCK))
+                # Send 'sub' for the topic
+                msg = json.dumps({"op": "sub", "topic": t}) + "\n"
                 s.sendall(msg.encode())
+                
                 buf = b""
                 while True:
                     chunk = s.recv(65536)
@@ -109,39 +166,63 @@ def _bus_poll(topics: list[str], timeout_ms: int = 180000) -> tuple[str, str] | 
                         break
                     buf += chunk
                     if b"\n" in buf:
-                        break
-            r = json.loads(buf.split(b"\n")[0])
-            seqs[t] = r.get("seq", 0) if r.get("ok") else 0
+                        lines = buf.split(b"\n")
+                        for line in lines[:-1]:
+                            if not line: continue
+                            r = json.loads(line)
+                            # Skip initial 'ok' ack
+                            if r.get("ok") and not r.get("data") and r.get("seq") == 0:
+                                continue
+                            if r.get("data"):
+                                return (r.get("topic", t), r["data"])
+                        buf = lines[-1]
         except Exception:
-            seqs[t] = 0
+            pass
+        return None
 
+    # For multiple topics, we use 'sub' with a pattern if they share a prefix,
+    # or we fall back to the sequential 'get' poll.
+    # Given the current use cases, we'll implement a robust sequential poll
+    # but try to use 'sub' where possible.
+    
     deadline = time.monotonic() + timeout_ms / 1000.0
-    poll_interval = 0.5  # seconds between checks
-
     while time.monotonic() < deadline:
         for t in topics:
-            try:
-                after = seqs.get(t, 0)
-                msg = json.dumps({"op": "poll", "topic": t,
-                                  "after_seq": after, "timeout_ms": 500}) + "\n"
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                    s.settimeout(3.0)
-                    s.connect(str(_KC_SOCK))
-                    s.sendall(msg.encode())
-                    buf = b""
-                    while True:
-                        chunk = s.recv(65536)
-                        if not chunk:
-                            break
-                        buf += chunk
-                        if b"\n" in buf:
-                            break
-                r = json.loads(buf.split(b"\n")[0])
-                if r.get("ok") and r.get("data") and r.get("seq", 0) > after:
-                    return (t, r["data"])
-            except Exception:
-                pass
-        time.sleep(poll_interval)
+            data = _bus_get(t)
+            if data:
+                return (t, data)
+        time.sleep(0.5)
+    return None
+
+
+def _bus_sub_pattern(pattern: str, timeout_ms: int = 45000) -> tuple[str, str] | None:
+    """
+    Block until any topic matching the glob pattern receives a message.
+    Returns (topic, data) or None on timeout.
+    """
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout_ms / 1000.0)
+            s.connect(str(_KC_SOCK))
+            msg = json.dumps({"op": "sub", "pattern": pattern}) + "\n"
+            s.sendall(msg.encode())
+            
+            buf = b""
+            while True:
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                if b"\n" in buf:
+                    lines = buf.split(b"\n")
+                    for line in lines[:-1]:
+                        if not line: continue
+                        r = json.loads(line)
+                        if r.get("data"):
+                            return (r.get("topic"), r["data"])
+                    buf = lines[-1]
+    except Exception:
+        pass
     return None
 
 

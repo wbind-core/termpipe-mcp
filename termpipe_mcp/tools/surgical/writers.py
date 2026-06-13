@@ -34,6 +34,7 @@ from .helpers import (
     line_delta_summary, ai_analyze_error, record_edit,
 )
 from .reviewer import pre_commit_gate
+from .workspace_gate import workspace_gate, workspace_gate_consume, workspace_gate_checkpoint
 
 
 def register_tools(mcp):
@@ -52,6 +53,9 @@ def register_tools(mcp):
             dry_run:     If True, show diff preview without writing. Default: False.
         """
         try:
+            block = workspace_gate(path)
+            if block:
+                return block
             lines = read_file_lines(path)
             old_count = len(lines)
             new_lines_in = content.rstrip("\n").split("\n")
@@ -74,6 +78,8 @@ def register_tools(mcp):
             
             atomic_write(path, new_lines_list)
             record_edit(path, "\n".join(old_copy), "\n".join(new_lines_list))
+            workspace_gate_consume(path)
+            cp = workspace_gate_checkpoint(path)
             lines = new_lines_list
             diff = generate_diff(old_copy, lines)
             out = (f"✅ Inserted {len(new_lines_in)} line(s) before line {line_number}\n"
@@ -81,7 +87,7 @@ def register_tools(mcp):
                    f"```diff\n{diff}\n```")
             if rev.note:
                 out += f"\n🤖 reviewer: {rev.note}"
-            return out
+            return f"{out}{cp}"
         except Exception as e:
             return f"[Error: {e}]"
 
@@ -99,6 +105,9 @@ def register_tools(mcp):
             dry_run:   If True, show diff preview without writing. Default: False.
         """
         try:
+            block = workspace_gate(path)
+            if block:
+                return block
             lines = read_file_lines(path)
             old_count = len(lines)
             if start_line < 0 or start_line >= old_count:
@@ -129,13 +138,15 @@ def register_tools(mcp):
             lines = new_lines_del
             atomic_write(path, lines)
             record_edit(path, "\n".join(old_copy), "\n".join(lines))
+            workspace_gate_consume(path)
+            cp = workspace_gate_checkpoint(path)
             out = f"✅ Deleted {len(deleted)} line(s) ({start_line}\u2013{end_line - 1})\n"
             out += line_delta_summary(old_count, len(lines), start_line) + "\n\n"
             out += "🗑️ Deleted:\n```\n"
             for i, l in enumerate(deleted, start_line):
                 out += f"{i:4d} | {l}\n"
             out += "```"
-            return out
+            return f"{out}{cp}"
         except Exception as e:
             return f"[Error: {e}]"
 
@@ -161,6 +172,9 @@ def register_tools(mcp):
             dry_run:   If True, show diff preview without writing. Default: False.
         """
         try:
+            block = workspace_gate(path)
+            if block:
+                return block
             lines = read_file_lines(path)
             old_count = len(lines)
             if start_line < 0 or start_line >= len(lines):
@@ -190,13 +204,15 @@ def register_tools(mcp):
             lines = lines[:start_line] + new_lines_in + lines[end_line:]
             atomic_write(path, lines)
             record_edit(path, "\n".join(old_copy), "\n".join(lines))
+            workspace_gate_consume(path)
+            cp = workspace_gate_checkpoint(path)
             edit_end = start_line + len(new_lines_in)
             diff = generate_diff(old_copy, lines)
             out = (f"✅ Replaced lines {start_line}\u2013{end_line - 1} "
                    f"({old_replaced} \u2192 {len(new_lines_in)} lines)\n"
                    f"{line_delta_summary(old_count, len(lines), start_line)}\n\n"
                    f"```diff\n{diff}\n```")
-            return out
+            return f"{out}{cp}"
         except Exception as e:
             return f"[Error: {e}]"
 
@@ -227,6 +243,9 @@ def register_tools(mcp):
         including similar nearby lines and AI analysis to help locate the right target.
         """
         try:
+            block = workspace_gate(path)
+            if block:
+                return block
             lines = read_file_lines(path)
             if line_number < 0 or line_number >= len(lines):
                 return (f"[Error: Line {line_number} out of range "
@@ -279,6 +298,8 @@ def register_tools(mcp):
             lines[line_number] = new_line
             atomic_write(path, lines)
             record_edit(path, old_line, new_line)
+            workspace_gate_consume(path)
+            cp = workspace_gate_checkpoint(path)
             inline = generate_inline_diff(old_line, new_line)
             note = (f" (replaced {'all ' + str(count) if replace_all and count > 1 else 'first'}"
                     f" of {count} occurrence(s))") if count > 1 else ""
@@ -286,6 +307,6 @@ def register_tools(mcp):
                    f"📐 {inline}\n"
                    f"Before: {old_line.strip()}\n"
                    f"After:  {new_line.strip()}")
-            return out
+            return f"{out}{cp}"
         except Exception as e:
             return f"[Error: {e}]"

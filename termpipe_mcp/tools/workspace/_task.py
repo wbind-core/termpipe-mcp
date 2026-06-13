@@ -19,7 +19,7 @@ def _get_plan_status(ws_id: str) -> str:
     # status stored as JSON in summary: {"text": "...", "plan_status": "..."}
     try:
         meta = json.loads(row["summary"] or "{}")
-        return meta.get("plan_status", PLAN_DRAFT)
+        return meta.get("plan_status") or PLAN_DRAFT
     except Exception:
         return PLAN_DRAFT
 

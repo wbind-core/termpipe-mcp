@@ -21,6 +21,7 @@ from ._review import (
     workspace_await_approval as _workspace_await_approval,
     workspace_task_request_review as _workspace_task_request_review,
     workspace_await_task_approval as _workspace_await_task_approval,
+    workspace_ask as _workspace_ask,
 )
 from ._task_ops import (
     workspace_task_create as _workspace_task_create,
@@ -41,6 +42,7 @@ def _gated(cwd: str, fn, *args, **kwargs):
     """
     Gate wrapper for write tools. Checks phase, enforces override lifecycle,
     appends checkpoint prompt if due.
+    Strips duplicate cwd from kwargs to avoid double-positional errors.
     """
     ws_id = ws_id_from_cwd(cwd)
     if not ws_id:
@@ -48,7 +50,8 @@ def _gated(cwd: str, fn, *args, **kwargs):
     gate = check_write_gate(ws_id)
     if not gate["allowed"]:
         return gate["reason"]
-    result = fn(*args, **kwargs)
+    kwargs.pop("cwd", None)
+    result = fn(cwd=cwd, *args, **kwargs)
     consume_once_override(ws_id)
     cp = checkpoint_suffix(ws_id)
     return f"{result}{cp}" if cp else result
@@ -62,16 +65,16 @@ def register_tools(mcp):
         return _workspace_init(cwd=cwd, goal=goal, task_items=task_items)
 
     @mcp.tool()
-    def workspace_plan_update(cwd: str, content: str, summary: str = None, status: str = None):
-        return _workspace_plan_update(cwd=cwd, content=content, summary=summary, status=status)
+    def workspace_plan_update(cwd: str, content: str, summary: str = None, status: str = "draft"):
+        return _gated(cwd, _workspace_plan_update, content=content, summary=summary, status=status)
 
     @mcp.tool()
     def workspace_walkthrough_update(cwd: str, content: str, summary: str = None):
-        return _workspace_walkthrough_update(cwd=cwd, content=content, summary=summary)
+        return _gated(cwd, _workspace_walkthrough_update, content=content, summary=summary)
 
     @mcp.tool()
     def workspace_doc_update(cwd: str, name: str, content: str, summary: str = None):
-        return _workspace_doc_update(cwd=cwd, name=name, content=content, summary=summary)
+        return _gated(cwd, _workspace_doc_update, name=name, content=content, summary=summary)
 
     @mcp.tool()
     def workspace_request_review(cwd: str, message: str = None):
@@ -110,11 +113,11 @@ def register_tools(mcp):
 
     @mcp.tool()
     def workspace_task_update(cwd: str, action: str, item_text: str = None, item_id: int = None, summary: str = None):
-        return _workspace_task_update(cwd=cwd, action=action, item_text=item_text, item_id=item_id, summary=summary)
+        return _gated(cwd, _workspace_task_update, action=action, item_text=item_text, item_id=item_id, summary=summary)
 
     @mcp.tool()
     def workspace_task_set_status(cwd: str, task_id: int, status: str, notes: str = None):
-        return _workspace_task_set_status(cwd=cwd, task_id=task_id, status=status, notes=notes)
+        return _gated(cwd, _workspace_task_set_status, task_id=task_id, status=status, notes=notes)
 
     @mcp.tool()
     def workspace_task_query(cwd: str, status: str = None, priority: str = None, task_type: str = None):
@@ -135,3 +138,19 @@ def register_tools(mcp):
     @mcp.tool()
     def workspace_override(cwd: str, reason: str):
         return _workspace_override(cwd=cwd, reason=reason)
+
+    @mcp.tool()
+    def workspace_ask(cwd: str, question: str, options: list, timeout_ms: int = 120000):
+        """
+        Ask the human a clarifying question via desktop notification with clickable buttons.
+        Blocks until the human clicks an option or timeout is reached.
+
+        Args:
+            cwd:        Project directory.
+            question:   The question to ask (shown as notification body).
+            options:    List of option labels — each becomes a clickable button (max 3).
+            timeout_ms: How long to wait in ms (default 2 minutes).
+
+        Returns "SELECTED: <label>" or "TIMEOUT".
+        """
+        return _workspace_ask(cwd=cwd, question=question, options=options, timeout_ms=timeout_ms)

@@ -16,7 +16,7 @@ import sys
 from ._db import _db_read_artifact, _db_get_task, _db_update_task_status, _db_list_tasks, _db_get_cc_session_num
 from ._bus import (
     ATYPE_TASK, ATYPE_PLAN,
-    PLAN_PENDING_APPROVAL, PLAN_APPROVED, PLAN_REJECTED,
+    PLAN_DRAFT, PLAN_PENDING_APPROVAL, PLAN_APPROVED, PLAN_REJECTED,
     _TOPIC_REVIEW_REQUEST, _TOPIC_APPROVED, _TOPIC_FEEDBACK, _TOPIC_REJECTED,
     _bus_pub, _bus_poll, _ARTIFACTS_ROOT,
 )
@@ -97,52 +97,24 @@ def _send_review_notification(
     view_cmd: Optional[str] = None,
 ) -> bool:
     """
-    Send a rich desktop notification with action buttons for plan review.
-    
-    Buttons:
-    - Approve: Publish to approved topic
-    - View Plan: Open the plan file for review
-    - Reject: Publish to rejected topic
-    
-    Args:
-        project_name: Name of the project
-        plan_path: Path to the implementation_plan.md file
-        view_cmd: Optional command to open the plan
-        
-    Returns:
-        True if notification was sent successfully
+    Send a desktop notification with Approve / View Plan / Reject buttons via kb notify.
+    Buttons publish to the workspace bus topics so workspace_await_approval() can poll.
     """
+    import shutil as _shutil
+    import subprocess as _sp
+    kb = _shutil.which("kb") or "/home/craig/.local/bin/kb"
     try:
-        DesktopNotifier, Urgency, Button = _ensure_desktop_notifier_setup()
-        
-        # Build the view command (open in default editor)
-        if not view_cmd:
-            view_cmd = f"xdg-open '{plan_path}'"
-        
-        loop_thread = _get_dn_event_loop()
-        
-        async def send():
-            notifier = DesktopNotifier(app_name="TermPipe")
-            
-            # Set up button press handler
-            notifier.on_button_pressed = lambda nid, key: _log_button_press(key)
-            notifier.on_clicked = lambda nid: _log_button_press("clicked")
-            
-            await notifier.send(
-                title=f"⚠️ Review Required: {project_name}",
-                message="Implementation plan awaiting your review\nClick a button to respond",
-                urgency=Urgency.Critical,
-                buttons=[
-                    Button(title="✓ Approve", on_pressed=lambda: _bus_pub(_TOPIC_APPROVED, "lgtm")),
-                    Button(title="📄 View Plan", on_pressed=lambda: _view_plan(view_cmd)),
-                    Button(title="✗ Reject", on_pressed=lambda: _bus_pub(_TOPIC_REJECTED, "rejected")),
-                ],
-                timeout=0  # 0 = don't auto-dismiss
-            )
-        
-        loop_thread.run_coroutine(send())
+        cmd = [
+            kb, "notify",
+            f"⚠️ Review Required: {project_name}",
+            "--body", f"Implementation plan ready for review\n{plan_path}",
+            "--urgency", "c",
+            "--button", f"✓ Approve:{_TOPIC_APPROVED}",
+            "--button", f"📄 View Plan:{_TOPIC_APPROVED}",  # opens via click handler on bus side
+            "--button", f"✗ Reject:{_TOPIC_REJECTED}",
+        ]
+        _sp.run(cmd, timeout=10)
         return True
-        
     except Exception as e:
         print(f"[_send_review_notification] Error: {e}", file=sys.stderr)
         return False
@@ -155,38 +127,26 @@ def _send_task_notification(
     task_path: str,
 ) -> bool:
     """
-    Send a rich desktop notification for task review.
+    Send a desktop notification for task review via kb notify.
     """
+    import shutil as _shutil
+    import subprocess as _sp
+    kb = _shutil.which("kb") or "/home/craig/.local/bin/kb"
+    _TASK_APPROVED = "termpipe.workspace.task.approved"
+    _TASK_FEEDBACK = "termpipe.workspace.task.feedback"
+    _TASK_REJECTED = "termpipe.workspace.task.rejected"
     try:
-        DesktopNotifier, Urgency, Button = _ensure_desktop_notifier_setup()
-        
-        loop_thread = _get_dn_event_loop()
-        
-        _TASK_APPROVED = "termpipe.workspace.task.approved"
-        _TASK_FEEDBACK = "termpipe.workspace.task.feedback"
-        _TASK_REJECTED = "termpipe.workspace.task.rejected"
-        
-        async def send():
-            notifier = DesktopNotifier(app_name="TermPipe")
-            
-            notifier.on_button_pressed = lambda nid, key: _log_button_press(key)
-            notifier.on_clicked = lambda nid: _log_button_press("clicked")
-            
-            await notifier.send(
-                title=f"⏳ Task Review: {project_name}",
-                message=f"Task #{task_id}: {task_title}\nClick a button to respond",
-                urgency=Urgency.Critical,
-                buttons=[
-                    Button(title="✓ Approve", on_pressed=lambda: _bus_pub(_TASK_APPROVED, "lgtm")),
-                    Button(title="📋 View Task", on_pressed=lambda: _view_plan(task_path)),
-                    Button(title="✗ Reject", on_pressed=lambda: _bus_pub(_TASK_REJECTED, "rejected")),
-                ],
-                timeout=0
-            )
-        
-        loop_thread.run_coroutine(send())
+        cmd = [
+            kb, "notify",
+            f"⏳ Task Review: {project_name}",
+            "--body", f"Task #{task_id}: {task_title}\n{task_path}",
+            "--urgency", "c",
+            "--button", f"✓ Approve:{_TASK_APPROVED}",
+            "--button", f"💬 Feedback:{_TASK_FEEDBACK}",
+            "--button", f"✗ Reject:{_TASK_REJECTED}",
+        ]
+        _sp.run(cmd, timeout=10)
         return True
-        
     except Exception as e:
         print(f"[_send_task_notification] Error: {e}", file=sys.stderr)
         return False
@@ -536,25 +496,20 @@ def workspace_override(cwd: str, reason: str) -> str:
     _OVERRIDE_SESSION = "termpipe.workspace.override.session"
     _OVERRIDE_REJECT  = "termpipe.workspace.override.rejected"
 
+    import shutil as _shutil
+    import subprocess as _sp
+    kb = _shutil.which("kb") or "/home/craig/.local/bin/kb"
     try:
-        DesktopNotifier, Urgency, Button = _ensure_desktop_notifier_setup()
-        loop_thread = _get_dn_event_loop()
-
-        async def send():
-            notifier = DesktopNotifier(app_name="TermPipe")
-            await notifier.send(
-                title=f"⚠️ Write Gate Override: {project_name}",
-                message=f"Claude wants to bypass the write gate.\n\nReason: {reason}",
-                urgency=Urgency.Critical,
-                buttons=[
-                    Button(title="✓ Allow Once",    on_pressed=lambda: _bus_pub(_OVERRIDE_ONCE, "once")),
-                    Button(title="✓ Allow Session", on_pressed=lambda: _bus_pub(_OVERRIDE_SESSION, "session")),
-                    Button(title="✗ Reject",         on_pressed=lambda: _bus_pub(_OVERRIDE_REJECT, "rejected")),
-                ],
-                timeout=0,
-            )
-
-        loop_thread.run_coroutine(send())
+        cmd = [
+            kb, "notify",
+            f"⚠️ Write Gate Override: {project_name}",
+            "--body", f"Claude wants to bypass the write gate.\n\nReason: {reason}",
+            "--urgency", "c",
+            "--button", f"✓ Allow Once:{_OVERRIDE_ONCE}",
+            "--button", f"✓ Allow Session:{_OVERRIDE_SESSION}",
+            "--button", f"✗ Reject:{_OVERRIDE_REJECT}",
+        ]
+        _sp.run(cmd, timeout=10)
     except Exception as e:
         return f"[workspace_override] Failed to send notification: {e}"
 
@@ -593,3 +548,60 @@ def workspace_override(cwd: str, reason: str) -> str:
         )
 
     return f"[workspace_override] Unexpected topic: {topic}"
+
+
+def workspace_ask(
+    cwd: str,
+    question: str,
+    options: list,
+    timeout_ms: int = 120000,
+) -> str:
+    """
+    Ask the human a question via desktop notification with clickable button options.
+    Blocks until a button is clicked or timeout is reached.
+
+    Args:
+        cwd:        Project directory (used for context in the notification title).
+        question:   The question to display in the notification body.
+        options:    List of option labels (each becomes a button). Max ~3 for readability.
+        timeout_ms: How long to wait for a response (default 2 minutes).
+
+    Returns:
+        "SELECTED: <label>"  — the label of the button the human clicked
+        "TIMEOUT"            — no response within timeout_ms
+        "[Error: ...]"       — if notification could not be sent
+    """
+    import shutil
+    import subprocess as _sp
+
+    if not options:
+        return "[workspace_ask] options list must not be empty."
+
+    project_name = Path(cwd).name
+    _TOPIC = "termpipe.workspace.ask.response"
+
+    kb_bin = shutil.which("kb") or "/home/craig/.local/bin/kb"
+
+    # Build kb notify command with buttons
+    cmd = [
+        kb_bin, "notify",
+        f"❓ {project_name}: needs input",
+        "--body", question,
+        "--urgency", "c",
+    ]
+    for label in options:
+        cmd += ["--button", f"{label}:{_TOPIC}"]
+
+    try:
+        _sp.run(cmd, capture_output=True, timeout=10)
+    except Exception as e:
+        return f"[workspace_ask] Failed to send notification: {e}"
+
+    # Block until a button is clicked
+    result = _bus_poll([_TOPIC], timeout_ms=timeout_ms)
+
+    if result is None:
+        return "TIMEOUT — no response received."
+
+    _topic, data = result
+    return f"SELECTED: {data}"

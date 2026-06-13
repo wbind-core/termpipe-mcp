@@ -107,102 +107,30 @@ def _probe_http(url: str, timeout: float = 2.0) -> bool:
 
 
 def _auto_detect_backend():
-    """Register OpenRouter via ~/.omniproxy/keys.json as the reviewer backend."""
-    _register_openrouter()
+    """Register local omniproxy (port 9920) as the reviewer backend."""
+    _register_local_omni()
 
 
-def _register_openrouter(model: str = None):
-    """Register OpenRouter as the reviewer backend via ~/.omniproxy/keys.json."""
-    import json
-    import random
+def _register_local_omni():
+    """Reviewer backend: local omniproxy at 9920 with qwen2.5-coder-7b-instruct."""
     import httpx
-    from pathlib import Path
 
-    def _load_keys():
-        for p in [Path.home() / ".omniproxy" / "keys.json",
-                  Path.home() / ".termpipe-mcp" / "keys.json",
-                  Path.home() / ".termpipe" / "keys.json"]:
-            if p.exists():
-                try:
-                    data = json.loads(p.read_text())
-                    if data:
-                        return data
-                except Exception:
-                    pass
-        return {}
-
-    def _load_models():
-        for p in [Path.home() / ".omniproxy" / "models01.json",
-                  Path.home() / ".termpipe-mcp" / "models.json"]:
-            if p.exists():
-                try:
-                    data = json.loads(p.read_text())
-                    if data:
-                        return [m.split(":", 1)[1] if ":" in m else m for m in data]
-                except Exception:
-                    pass
-        return ["qwen/qwen3-coder:free"]
-
-    keys = _load_keys()
-    api_key = keys.get("openrouter", "")
-    use_model = model or random.choice(_load_models())
+    _LOCAL_URL = "http://127.0.0.1:9920/v1/chat/completions"
+    _MODEL = "qwen2.5-coder-7b-instruct"
 
     def _fn(prompt: str, timeout: float) -> str:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
         payload = {
-            "model": use_model,
+            "model": _MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 800,
             "temperature": 0.0,
         }
         with httpx.Client(timeout=timeout) as client:
-            resp = client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                json=payload,
-            )
+            resp = client.post(_LOCAL_URL, json=payload)
             resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
+            return resp.json()["choices"][0]["message"]["content"].strip()
 
-    register_reviewer("openrouter", _fn)
-
-
-def _register_groq(model: str = "llama-3.1-8b-instant"):
-    """Register Groq as the reviewer backend via HTTP API."""
-    import json
-    import httpx
-    from pathlib import Path
-
-    keys_file = Path.home() / ".termpipe" / "keys.json"
-    keys = json.loads(keys_file.read_text())
-    api_key = keys.get("groq", "")
-
-    def _fn(prompt: str, timeout: float) -> str:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 800,
-            "temperature": 0.0,
-        }
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
-
-    register_reviewer("groq", _fn)
+    register_reviewer("local_omni", _fn)
 
 
 

@@ -6,7 +6,7 @@ This subpackage replaces the monolithic workspace.py.
 """
 
 # Cascade sub-module imports so importlib.reload(__init__) pulls fresh versions
-from . import _bus, _registry, _db, _files, _task, _artifacts
+from . import _bus, _registry, _db, _files, _state, _task, _artifacts
 from . import tools as _tools_mod
 
 # Re-export the external surface — these paths must not change

@@ -107,13 +107,19 @@ def workspace_plan_update(
     """
     Replace implementation_plan.md for the active workspace.
 
+    Automatically fires a desktop notification with Approve/View/Reject buttons
+    whenever the plan is updated, regardless of which status is passed. This
+    ensures the human is always notified even when the model skips
+    workspace_request_review().
+
     Args:
         cwd:     Project directory.
         content: Full markdown content for the implementation plan.
         summary: Optional one-line summary stored in metadata.
         status:  Plan lifecycle state: draft | pending_approval | approved | rejected
     """
-    from ._bus import PLAN_DRAFT
+    from ._bus import PLAN_DRAFT, PLAN_APPROVED, PLAN_REJECTED
+    from ._review import _send_review_notification
 
     ws_id = _registry_ws_id(cwd)
     if not ws_id:
@@ -128,17 +134,24 @@ def workspace_plan_update(
     set_phase(ws_id, "plan_draft")
 
     bus_flag = '✓' if r['bus_ok'] else '✗'
+    plan_path = r['file_path']
     base_msg = (
         f"implementation_plan.md updated  v{r['version']}  status={status}  "
-        f"bus={bus_flag}  {r['file_path']}"
+        f"bus={bus_flag}  {plan_path}"
     )
-    if status == PLAN_DRAFT:
+
+    # Fire desktop notification for any status that warrants human review.
+    # Skip only if the plan is already in a terminal state (approved/rejected)
+    # — those don't need a new review prompt.
+    if status not in (PLAN_APPROVED, PLAN_REJECTED):
+        notif_ok = _send_review_notification(project_name, plan_path)
+        notif_flag = "🔔 notification sent" if notif_ok else "⚠️  notification failed"
         return (
             base_msg
-            + f"\n\n⚠️  Plan is in status='{status}'. "
-              f"Call workspace_request_review(cwd) "
-              f"then workspace_await_approval(cwd) before proceeding to execution."
+            + f"\n{notif_flag} — Buttons: [✓ Approve] [📄 View Plan] [✗ Reject]\n"
+            + f"➡️  Call workspace_await_approval(cwd=\"{cwd}\") to block until response."
         )
+
     return base_msg
 
 

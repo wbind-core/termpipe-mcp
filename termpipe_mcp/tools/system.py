@@ -184,7 +184,23 @@ def log_tool_call(tool_name: str, args: dict, result: str):
 def _get_tactical_insights(cwd: str) -> str:
     """Aggregate live system telemetry from a single kb get sys.metrics call."""
     import json as _j, re
-    insights = ["--- TACTICAL ENVIRONMENT INSIGHTS (Model Hints) ---"]
+    hints = [
+        "🔧 HIGH-IMPACT TOOLS:",
+        "  write_file <path> <content>                        — atomic file write",
+        "  smart_replace <path> <old> <new>                   — content-addressed surgical replacement (no line# needed)",
+        "  delete_lines / insert_lines / overwrite_lines      — line-range surgery",
+        "  patch_line <path> <line#> <old> <new>              — single-line substring replacement",
+        "  undo                                               — revert last write op",
+        "  termf_exec <cmd> [cwd] [timeout_ms] [background]  — real PTY terminal; use background=True for builds/downloads,",
+        "                                                       adjust timeout_ms for long-running ops (default is short)",
+        "  termf_live_exec <cmd> [pane_id]                   — injects into live WezTerm pane via wezterm cli;",
+        "                                                       use for builds or anything that doesn't play nice with MCP;",
+        "                                                       status piped back via kb bus",
+        "  build <cwd> <language> [manager]                   — compile + service detect/restart in one shot (go/rust/python/ts)",
+        "  web_search <query>                                 — live web search",
+        "  web_fetch <url>                                    — fetch full page content",
+    ]
+    insights = ["\n".join(hints)]
 
     # Single bus call — CollectMetricsOnce runs on-demand inside kbd
     data = {}
@@ -246,12 +262,40 @@ def _get_tactical_insights(cwd: str) -> str:
     net_str  = f" | Speed: {net_test:.1f} Mbps" if net_test > 0 else ""
     insights.append(f"🌐 NET: {wifi_str}Local: {local_ip} | Ext: {ext_ip}{net_str}")
 
-    # 4. System metrics
+    # 4. Hardware
+    cpu_model = data.get("cpu_model", "")
+    if cpu_model: insights.append(f"🖥️  CPU: {cpu_model}")
+
+    gpu_model   = data.get("gpu_model", "")
+    gpu_pct     = data.get("gpu_percent", 0)
+    gpu_mem_u   = data.get("gpu_memory_used", 0) / (1024**3)
+    gpu_mem_t   = data.get("gpu_memory_total", 0) / (1024**3)
+    if gpu_model:
+        gpu_mem_str = f" | VRAM: {gpu_mem_u:.1f}G/{gpu_mem_t:.1f}G" if gpu_mem_t > 0 else ""
+        insights.append(f"🎮 GPU: {gpu_model} ({gpu_pct:.1f}%{gpu_mem_str})")
+
+    # 5. System metrics
     ru  = data.get("ram_used", 0) / (1024**3)
     rt  = data.get("ram_total", 0) / (1024**3)
     rp  = data.get("ram_used_percent", 0)
     cpu = data.get("cpu_percent", 0)
-    insights.append(f"🧠 SYS: RAM: {ru:.1f}G/{rt:.1f}G ({rp:.1f}%) | CPU: {cpu:.1f}%")
+    procs = data.get("process_count", 0)
+    swap_pct = data.get("swap_used_percent", 0)
+    swap_str = f" | Swap: {swap_pct:.0f}%" if swap_pct > 0 else ""
+    insights.append(f"🧠 SYS: RAM: {ru:.1f}G/{rt:.1f}G ({rp:.1f}%){swap_str} | CPU: {cpu:.1f}% | Procs: {procs}")
+
+    # 6. Disk I/O
+    dr = data.get("disk_read_speed", 0) / (1024**2)
+    dw = data.get("disk_write_speed", 0) / (1024**2)
+    if dr > 0.01 or dw > 0.01:
+        insights.append(f"💾 DISK: Read: {dr:.1f} MB/s | Write: {dw:.1f} MB/s")
+
+    # 7. Kernel
+    kernel = data.get("kernel_version", "")
+    pkg    = data.get("pkg_count", 0)
+    flat   = data.get("flatpak_count", 0)
+    pkg_str = f" | Pkgs: {pkg} dpkg / {flat} flatpak" if pkg else ""
+    if kernel: insights.append(f"🐧 KERNEL: {kernel}{pkg_str}")
 
 
     # Git (still local — cwd-specific, not in bus payload)
@@ -265,6 +309,7 @@ def _get_tactical_insights(cwd: str) -> str:
 
     insights.append("-" * 50)
     return "\n".join(insights)
+
 
 
 def _bootstrap_context_core(directory: str) -> str:
@@ -300,15 +345,47 @@ asyncio.run(main())
     return ""
 
 
+
+def _warmup_local_model() -> None:
+    """Fire a 1-token ping to OmniProxy local to force model into VRAM."""
+    import urllib.request as _ur
+    import json as _j
+    try:
+        payload = _j.dumps({
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+        }).encode()
+        req = _ur.Request(
+            "http://127.0.0.1:9920/v1/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        _ur.urlopen(req, timeout=10)
+    except Exception:
+        pass
+
+
 def _ensure_daemons():
     """Ensure critical TermPipe daemons are active."""
-    import time
     for path, name in [(KBD_PATH, "kbd"), (TERMCP_PATH, "termcp"), (CONDD_PATH, "condd"), (GTTINFORM_PATH, "gttinform"), (KB_PATH, "kb")]:
         if subprocess.run(["pgrep", "-f", name], capture_output=True).returncode != 0:
             cmd = [path] if name != "termcp" else [path, "server"]
             if name == "kb": cmd = [path, "start"]
             subprocess.Popen(cmd, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    # OmniProxy — start if port 9920 is not up
+    omni_bin = str(Path.home() / ".local" / "bin" / "omni")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        port_up = s.connect_ex(("127.0.0.1", 9920)) == 0
+    if not port_up:
+        subprocess.Popen(
+            [omni_bin, "serve", "--code", "--tools"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 # ---------------------------------------------------------------------------
 # TOOL REGISTRATION
@@ -370,6 +447,7 @@ def register_tools(mcp):
         except: pass
 
         threading.Thread(target=_ensure_daemons, daemon=True).start()
+        threading.Thread(target=_warmup_local_model, daemon=True).start()
 
         MODULE_CAT = {"git":"GIT","process":"PROCESS","termf":"TERMF","iflow":"IFLOW","files":"FILE","surgical":"SURGICAL","apps":"APPS","wbind":"WBIND","search":"SEARCH","thread":"THREAD","system":"SYSTEM","debug":"DEBUG","gemini_debug":"GEMINI","web_search":"WEB_SEARCH","gtt":"GTT","workspace":"TOOLS","writers":"WRITERS","readers":"READERS","replacers":"REPLACERS","formatters":"FORMATTERS"}
         
@@ -427,16 +505,17 @@ def register_tools(mcp):
         # Phase state machine briefing
         try:
             try:
-                from termpipe_mcp.tools.workspace._phase import phase_briefing, ws_id_from_cwd
+                from termpipe_mcp.tools.workspace._phase import phase_briefing, ws_id_from_cwd, _start_session_approve_listener
             except ImportError:
-                from tools.workspace._phase import phase_briefing, ws_id_from_cwd
+                from tools.workspace._phase import phase_briefing, ws_id_from_cwd, _start_session_approve_listener
             ws_id = ws_id_from_cwd(res_cwd)
             if ws_id:
                 out += phase_briefing(ws_id)
+                _start_session_approve_listener(ws_id, project_name=Path(res_cwd).name)
         except Exception as _phase_err:
             out += f"\n[phase briefing error: {_phase_err}]\n"
 
-        out += f"\n🕒 {datetime.now().strftime('%Y-%m-%d %I:%M %p')}"
+        out += f"\n🕒 User's local time: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}"
         return out
 
     @mcp.tool()
@@ -445,6 +524,76 @@ def register_tools(mcp):
         res_cwd = str(Path(cwd).expanduser().resolve())
         _reconcile_tasks(res_cwd)
         return f"Workspace armed: {res_cwd}\n{_open_tasks_summary(res_cwd)}\n{_bootstrap_context_core(res_cwd)}\nBriefing complete."
+
+    @mcp.tool()
+    def telemetry_report(report: str = "top") -> str:
+        """
+        Query tool-call telemetry from ~/.termpipe/telemetry.db.
+
+        report: one of —
+          top       — most-called tools with avg latency + error rate (default)
+          failures  — tools that fail most, with error messages
+          slow      — slowest tools by avg duration (min 3 calls)
+          categories — call volume + avg latency by category
+          daily     — call volume per day (last 14 days)
+          unused    — tools never called this session
+          sql:<SQL> — run a raw SELECT (e.g. sql:SELECT * FROM tool_calls LIMIT 5)
+        """
+        try:
+            from termpipe_mcp import telemetry as _tel
+        except ImportError:
+            return "❌ Telemetry module not found."
+
+        r = report.strip().lower()
+
+        def _fmt(rows, title):
+            if not rows:
+                return f"📊 {title}\n(no data yet)"
+            keys = list(rows[0].keys())
+            widths = {k: max(len(k), max(len(str(row.get(k, ""))) for row in rows)) for k in keys}
+            header = "  ".join(k.ljust(widths[k]) for k in keys)
+            sep = "  ".join("-" * widths[k] for k in keys)
+            lines = [f"📊 {title}", header, sep]
+            for row in rows:
+                lines.append("  ".join(str(row.get(k, "")).ljust(widths[k]) for k in keys))
+            return "\n".join(lines)
+
+        if r == "top":
+            rows = _tel.top_tools(25)
+            return _fmt(rows, "Top Tools by Call Volume")
+        elif r == "failures":
+            rows = _tel.failure_report(30)
+            return _fmt(rows, "Failure Report — Most Common Errors")
+        elif r == "slow":
+            rows = _tel.slowest_tools(15)
+            return _fmt(rows, "Slowest Tools (avg ms, ≥3 calls)")
+        elif r == "categories":
+            rows = _tel.category_breakdown()
+            return _fmt(rows, "Tool Usage by Category")
+        elif r == "daily":
+            rows = _tel.daily_volume(14)
+            return _fmt(rows, "Daily Call Volume (last 14 days)")
+        elif r == "unused":
+            import termpipe_mcp.tools as _tmod
+            try:
+                all_tools = set(mcp._tool_manager._tools.keys())
+            except Exception:
+                all_tools = set()
+            called = {row["tool_name"] for row in _tel.never_called()}
+            unused = sorted(all_tools - called)
+            if not unused:
+                return "✅ All registered tools have been called at least once."
+            return "🕸️  Never-called tools:\n" + "\n".join(f"  - {t}" for t in unused)
+        elif r.startswith("sql:"):
+            sql = report[4:].strip()
+            if not sql.upper().startswith("SELECT"):
+                return "❌ Only SELECT queries allowed."
+            rows = _tel.query(sql)
+            return _fmt(rows, f"Custom Query")
+        else:
+            return (
+                "Unknown report type. Options: top, failures, slow, categories, daily, unused, sql:<SELECT>"
+            )
 
     @mcp.tool()
     def reload_tools() -> str:

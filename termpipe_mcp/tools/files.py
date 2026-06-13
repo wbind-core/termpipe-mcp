@@ -4,7 +4,11 @@ File operation tools for TermPipe MCP Server.
 
 from pathlib import Path
 from typing import Optional
+from termpipe_mcp.tools.surgical.helpers import record_edit
 from termpipe_mcp.tools.surgical.reviewer import pre_commit_gate
+from termpipe_mcp.tools.surgical.workspace_gate import (
+    workspace_gate, workspace_gate_consume, workspace_gate_checkpoint,
+)
 
 
 def register_tools(mcp):
@@ -55,11 +59,18 @@ def register_tools(mcp):
             path: File path (supports ~ for home)
             content: Content to write
         """
+        block = workspace_gate(path)
+        if block:
+            return block
         try:
             p = Path(path).expanduser()
             p.parent.mkdir(parents=True, exist_ok=True)
+            old_content = p.read_text() if p.exists() else ""
             p.write_text(content)
-            return f"✅ Written {len(content)} chars to {path}"
+            record_edit(str(p), old_content, content)
+            workspace_gate_consume(path)
+            cp = workspace_gate_checkpoint(path)
+            return f"✅ Written {len(content)} chars to {path}{cp}"
         except Exception as e:
             return f"[Error: {str(e)}]"
 
@@ -72,12 +83,20 @@ def register_tools(mcp):
             path: File path (supports ~ for home)
             content: Content to append
         """
+        block = workspace_gate(path)
+        if block:
+            return block
         try:
             p = Path(path).expanduser()
             p.parent.mkdir(parents=True, exist_ok=True)
+            old_content = p.read_text() if p.exists() else ""
             with open(p, "a") as f:
                 f.write(content)
-            return f"✅ Appended {len(content)} chars to {path}"
+            new_content = old_content + content
+            record_edit(str(p), old_content, new_content)
+            workspace_gate_consume(path)
+            cp = workspace_gate_checkpoint(path)
+            return f"✅ Appended {len(content)} chars to {path}{cp}"
         except Exception as e:
             return f"[Error: {str(e)}]"
 
@@ -251,18 +270,22 @@ def register_tools(mcp):
             source: Source path
             destination: Destination path
         """
+        block = workspace_gate(source)
+        if block:
+            return block
         try:
             src = Path(source).expanduser()
             dst = Path(destination).expanduser()
-            
+
             if not src.exists():
                 return f"[Error: Source not found: {source}]"
-            
+
             dst.parent.mkdir(parents=True, exist_ok=True)
             src.rename(dst)
-            
-            return f"✅ Moved {source} → {destination}"
-            
+            workspace_gate_consume(source)
+            cp = workspace_gate_checkpoint(source)
+            return f"✅ Moved {source} → {destination}{cp}"
+
         except Exception as e:
             return f"[Error: {str(e)}]"
 
@@ -314,6 +337,12 @@ def register_tools(mcp):
             p = Path(str(item["path"])).expanduser()
             entries.append((p, str(item["content"])))
 
+        # ── Workspace gate — check on first path (walks up to find workspace) ──
+        if not dry_run:
+            block = workspace_gate(str(entries[0][0]))
+            if block:
+                return block
+
         # ── Dry-run: report what would happen ───────────────────────────────
         if dry_run:
             lines = [f"🔍 Dry-run — {len(entries)} file(s) would be written:\n"]
@@ -343,10 +372,15 @@ def register_tools(mcp):
                 break
 
         if error_msg is None:
+            for p, content in entries:
+                orig = originals.get(p)
+                record_edit(str(p), orig.decode("utf-8") if isinstance(orig, bytes) else (orig or ""), content)
+            workspace_gate_consume(str(entries[0][0]))
+            cp = workspace_gate_checkpoint(str(entries[0][0]))
             summary = f"✅ write_batch: {len(entries)} file(s) written\n"
             for p, content in entries:
                 summary += f"   {p}  ({len(content)} chars)\n"
-            return summary
+            return summary + cp
 
         # ── Rollback ─────────────────────────────────────────────────────────
         rollback_errors = []

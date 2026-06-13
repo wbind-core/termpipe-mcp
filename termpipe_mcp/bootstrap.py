@@ -15,7 +15,6 @@ import json
 from termpipe_mcp.settings import load_settings, save_settings
 from termpipe_mcp.tools.surgical.reviewer import (
     register_reviewer,
-    _register_openrouter,
 )
 
 
@@ -52,7 +51,6 @@ def maybe_bootstrap():
 def _register_from_settings(settings: dict):
     """Register OpenRouter reviewer from ~/.omniproxy/keys.json."""
     backend = settings.get("reviewer_backend")
-    model   = settings.get("reviewer_model")
 
     # Migrate any legacy backend to openrouter
     if backend in ("omniproxy", "cliproxy", "iflow", "gemini-cli", "qwen-cli", "groq"):
@@ -61,5 +59,5 @@ def _register_from_settings(settings: dict):
         from termpipe_mcp.settings import save_settings
         save_settings(settings)
 
-    _register_openrouter(model=model)
+    # reviewer auto-detection runs lazily via _get_reviewer() in reviewer.py
 
