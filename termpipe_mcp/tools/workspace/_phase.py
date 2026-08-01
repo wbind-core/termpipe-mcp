@@ -28,7 +28,7 @@ PHASES = {
     "task_needs_review",
 }
 
-WRITE_UNLOCKED_PHASES = PHASES  # gate disabled — all phases allow writes
+WRITE_UNLOCKED_PHASES = {"task_in_progress"}
 
 NEXT_ACTION = {
     "no_plan": (

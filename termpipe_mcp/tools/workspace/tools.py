@@ -11,14 +11,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "vendor"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "desktop-notifier" / "src"))
 
 from ._plan import (
-    workspace_init as _workspace_init,
+    workspace_init_and_review as _workspace_init_and_review,
     workspace_plan_update as _workspace_plan_update,
     workspace_walkthrough_update as _workspace_walkthrough_update,
     workspace_doc_update as _workspace_doc_update,
 )
 from ._review import (
-    workspace_request_review as _workspace_request_review,
-    workspace_await_approval as _workspace_await_approval,
     workspace_task_request_review as _workspace_task_request_review,
     workspace_await_task_approval as _workspace_await_task_approval,
     workspace_ask as _workspace_ask,
@@ -46,7 +44,7 @@ def _gated(cwd: str, fn, *args, **kwargs):
     """
     ws_id = ws_id_from_cwd(cwd)
     if not ws_id:
-        return f"⛔ WRITE BLOCKED — no workspace found for {cwd}. Run workspace_init first."
+        return f"⛔ WRITE BLOCKED — no workspace found for {cwd}. Run workspace_init_and_review first."
     gate = check_write_gate(ws_id)
     if not gate["allowed"]:
         return gate["reason"]
@@ -61,8 +59,24 @@ def register_tools(mcp):
     """Register all workspace_* tools with the MCP server."""
 
     @mcp.tool()
-    def workspace_init(cwd: str, goal: str, task_items: str = None):
-        return _workspace_init(cwd=cwd, goal=goal, task_items=task_items)
+    def workspace_init_and_review(
+        cwd: str,
+        goal: str = None,
+        plan_content: str = None,
+        task_items: str = None,
+    ):
+        """
+        Start (or revise) a workspace's implementation plan, blocking until a
+        human verdict arrives on termpipe.workspace.status.
+
+        First call for a fresh cwd: goal + plan_content required.
+        Revise loop after REJECT: plan_content required, goal/task_items ignored.
+        Returns APPROVE (with next-step hint to call workspace_task) or the
+        unified-diff feedback on REJECT (with hint to revise and call again).
+        """
+        return _workspace_init_and_review(
+            cwd=cwd, goal=goal, plan_content=plan_content, task_items=task_items,
+        )
 
     @mcp.tool()
     def workspace_plan_update(cwd: str, content: str, summary: str = None, status: str = "draft"):
@@ -76,13 +90,10 @@ def register_tools(mcp):
     def workspace_doc_update(cwd: str, name: str, content: str, summary: str = None):
         return _gated(cwd, _workspace_doc_update, name=name, content=content, summary=summary)
 
-    @mcp.tool()
-    def workspace_request_review(cwd: str, message: str = None):
-        return _workspace_request_review(cwd=cwd, message=message)
-
-    @mcp.tool()
-    def workspace_await_approval(cwd: str, timeout_ms: int = 180000):
-        return _workspace_await_approval(cwd=cwd, timeout_ms=timeout_ms)
+    # workspace_request_review / workspace_await_approval removed —
+    # fully absorbed into workspace_init_and_review (plan-level review is now
+    # single-call: submit + block + parse verdict, no separate request/await
+    # pair). Task-level review below is untouched pending a future pass.
 
     @mcp.tool()
     def workspace_task_request_review(cwd: str, task_id: int, message: str = None):

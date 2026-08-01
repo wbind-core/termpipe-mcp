@@ -18,6 +18,7 @@ from ._bus import (
     ATYPE_TASK, ATYPE_PLAN,
     PLAN_DRAFT, PLAN_PENDING_APPROVAL, PLAN_APPROVED, PLAN_REJECTED,
     _TOPIC_REVIEW_REQUEST, _TOPIC_APPROVED, _TOPIC_FEEDBACK, _TOPIC_REJECTED,
+    _TOPIC_LATEST,
     _bus_pub, _bus_poll, _ARTIFACTS_ROOT,
 )
 from ._artifacts import _upsert_artifact
@@ -211,6 +212,14 @@ def workspace_request_review(
     })
     _bus_pub(_TOPIC_REVIEW_REQUEST, payload, mime="application/json")
 
+    # Publish the stable "latest pending plan" pointer for external
+    # consumers (hotkey scripts, etc.).
+    _bus_pub(_TOPIC_LATEST, json.dumps({
+        "ws_id": ws_id,
+        "project": project_name,
+        "plan_path": plan_path,
+    }), mime="application/json")
+
     # Advance phase
     set_phase(ws_id, "pending_approval")
 
@@ -244,7 +253,7 @@ def workspace_request_review(
 
 def workspace_await_approval(
     cwd: str,
-    timeout_ms: int = 180000,
+    timeout_ms: Optional[int] = None,
 ) -> str:
     """
     Block until the human approves, sends feedback, or rejects the plan.
@@ -253,7 +262,11 @@ def workspace_await_approval(
 
     Args:
         cwd:        Project directory.
-        timeout_ms: Max wait in milliseconds (default 3 minutes).
+        timeout_ms: Max wait in milliseconds. Defaults to None, which blocks
+                    indefinitely — appropriate here since human review time
+                    is unbounded and there's no need to timeout/republish
+                    while someone is actively looking at the plan. Pass an
+                    explicit value to restore the old timeout behavior.
     """
     ws_id = _registry_ws_id(cwd)
     if not ws_id:
@@ -293,8 +306,9 @@ def workspace_await_approval(
             "requested_at": datetime.now(timezone.utc).isoformat(),
         })
         _bus_pub(_TOPIC_REVIEW_REQUEST, payload, mime="application/json")
+        elapsed = "unbounded wait" if timeout_ms is None else f"{timeout_ms // 1000}s"
         return (
-            f"TIMEOUT — no response after {timeout_ms // 1000}s.\n"
+            f"TIMEOUT — no response after {elapsed}.\n"
             f"Review request republished. Please prompt the user to review."
         )
 

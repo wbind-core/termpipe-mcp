@@ -118,8 +118,16 @@ def workspace_plan_update(
         summary: Optional one-line summary stored in metadata.
         status:  Plan lifecycle state: draft | pending_approval | approved | rejected
     """
-    from ._bus import PLAN_DRAFT, PLAN_APPROVED, PLAN_REJECTED
+    from ._bus import PLAN_DRAFT, PLAN_PENDING_APPROVAL, PLAN_APPROVED, PLAN_REJECTED, _TOPIC_LATEST, _bus_pub
     from ._review import _send_review_notification
+    import json as _json
+
+    _VALID_STATUSES = (PLAN_DRAFT, PLAN_PENDING_APPROVAL, PLAN_APPROVED, PLAN_REJECTED)
+    if status not in _VALID_STATUSES:
+        return (
+            f"[workspace_plan_update] Invalid status '{status}'. "
+            f"Must be one of: {', '.join(_VALID_STATUSES)}."
+        )
 
     ws_id = _registry_ws_id(cwd)
     if not ws_id:
@@ -146,10 +154,26 @@ def workspace_plan_update(
     if status not in (PLAN_APPROVED, PLAN_REJECTED):
         notif_ok = _send_review_notification(project_name, plan_path)
         notif_flag = "🔔 notification sent" if notif_ok else "⚠️  notification failed"
+
+        # Publish the stable "latest pending plan" pointer for external
+        # consumers (hotkey scripts, etc.) regardless of which call path
+        # (plan_update vs request_review) triggered the notification.
+        _bus_pub(_TOPIC_LATEST, _json.dumps({
+            "ws_id": ws_id,
+            "project": project_name,
+            "plan_path": plan_path,
+        }), mime="application/json")
+
+        next_step = (
+            f"➡️  Call workspace_await_approval(cwd=\"{cwd}\") to block until response."
+            if status == PLAN_PENDING_APPROVAL else
+            f"➡️  Call workspace_request_review(cwd=\"{cwd}\") first, "
+            f"then workspace_await_approval(cwd=\"{cwd}\")."
+        )
         return (
             base_msg
             + f"\n{notif_flag} — Buttons: [✓ Approve] [📄 View Plan] [✗ Reject]\n"
-            + f"➡️  Call workspace_await_approval(cwd=\"{cwd}\") to block until response."
+            + next_step
         )
 
     return base_msg
@@ -210,6 +234,145 @@ def workspace_doc_update(
         f"{name} updated  v{r['version']}  "
         f"bus={'✓' if r['bus_ok'] else '✗'}  "
         f"topic={r['topic']}  {r['file_path']}"
+    )
+
+
+def workspace_init_and_review(
+    cwd: str,
+    goal: Optional[str] = None,
+    plan_content: Optional[str] = None,
+    task_items: Optional[str] = None,
+) -> str:
+    """
+    Single entry point for starting or revising a workspace's implementation plan.
+    Replaces workspace_init + workspace_request_review + workspace_await_approval.
+
+    First call for a given cwd (no workspace yet): `goal` and `plan_content` are
+    both required. Initialises task.md/implementation_plan.md/walkthrough.md via
+    workspace_init, then immediately overwrites implementation_plan.md with the
+    real `plan_content`.
+
+    Subsequent calls (workspace already exists — i.e. a revise loop after a
+    REJECT verdict): only `plan_content` is required; `goal`/`task_items` are
+    ignored.
+
+    Either way, this call:
+      1. Persists the plan as pending_approval and publishes it for review
+         (desktop notification + termpipe.workspace.review_request/latest, so
+         any external consumer such as a hotkey script can resolve what's
+         pending and where, independent of the verdict channel).
+      2. Blocks indefinitely (no timeout) on termpipe.workspace.status — the
+         single verdict channel a human-side review sidecar publishes to.
+      3. Parses the verdict:
+           "APPROVE"                      -> plan approved, phase -> approved
+           "REJECT SEE FEEDBACK <path>"   -> reads the unified-diff feedback
+                                             artifact at <path> and returns it
+                                             inline, phase -> plan_draft
+
+    Args:
+        cwd:          Absolute path to the project directory.
+        goal:         One-sentence goal. Required only on the first call.
+        plan_content: Full markdown content for implementation_plan.md. Always required.
+        task_items:   Optional newline-separated seed tasks. Only used on first call.
+    """
+    from ._bus import (
+        PLAN_PENDING_APPROVAL, PLAN_APPROVED, PLAN_REJECTED,
+        _TOPIC_REVIEW_REQUEST, _TOPIC_LATEST, _TOPIC_STATUS,
+        _bus_pub, _bus_poll,
+    )
+    from ._review import _send_review_notification
+    import json as _json
+
+    if plan_content is None or not plan_content.strip():
+        return (
+            "[workspace_init_and_review] plan_content is required — write the actual "
+            "implementation plan markdown and pass it here."
+        )
+
+    ws_id = _registry_ws_id(cwd)
+    project_name = Path(cwd).name
+
+    if not ws_id:
+        if not goal:
+            return (
+                "[workspace_init_and_review] No workspace exists yet for this cwd — "
+                "`goal` is required on the first call."
+            )
+        init_result = workspace_init(cwd=cwd, goal=goal, task_items=task_items)
+        ws_id = _registry_ws_id(cwd)
+        if not ws_id:
+            return f"[workspace_init_and_review] workspace_init failed:\n{init_result}"
+
+    # Persist the real plan content — overwrites the workspace_init skeleton on
+    # a first call, or replaces the previous draft on a revise loop.
+    packed = _pack_summary(None, PLAN_PENDING_APPROVAL)
+    r = _upsert_artifact(ws_id, project_name, ATYPE_PLAN,
+                         "implementation_plan.md", plan_content, summary=packed)
+    plan_path = r["file_path"]
+    set_phase(ws_id, "pending_approval")
+
+    review_payload = _json.dumps({
+        "ws_id": ws_id,
+        "project": project_name,
+        "plan_path": plan_path,
+        "plan_content": plan_content,
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+    })
+    _bus_pub(_TOPIC_REVIEW_REQUEST, review_payload, mime="application/json")
+    _bus_pub(_TOPIC_LATEST, _json.dumps({
+        "ws_id": ws_id, "project": project_name, "plan_path": plan_path,
+    }), mime="application/json")
+    _send_review_notification(project_name, plan_path)
+
+    # Block indefinitely — human review time is unbounded, same rationale as
+    # the old workspace_await_approval(timeout_ms=None) behavior.
+    result = _bus_poll([_TOPIC_STATUS], timeout_ms=None)
+
+    if result is None:
+        return (
+            "[workspace_init_and_review] Verdict channel closed unexpectedly. "
+            "Call workspace_init_and_review(cwd, plan_content=...) again to re-publish."
+        )
+
+    _topic, data = result
+    verdict = (data or "").strip()
+
+    if verdict.upper().startswith("APPROVE"):
+        packed = _pack_summary("Approved", PLAN_APPROVED)
+        _upsert_artifact(ws_id, project_name, ATYPE_PLAN,
+                         "implementation_plan.md", plan_content, summary=packed)
+        set_phase(ws_id, "approved")
+        return (
+            f"PLAN APPROVED ✅  ws_{ws_id}  project={project_name}\n"
+            f"   {plan_path}\n\n"
+            f"➡️  REQUIRED NEXT STEP: call workspace_task (action=create) to register "
+            f"at least one task. Write tools remain gated until a task exists."
+        )
+
+    if verdict.upper().startswith("REJECT SEE FEEDBACK"):
+        feedback_path = verdict[len("REJECT SEE FEEDBACK"):].strip()
+        diff_text = None
+        if feedback_path:
+            try:
+                diff_text = Path(feedback_path).expanduser().read_text()
+            except Exception as e:
+                diff_text = f"[workspace_init_and_review] Could not read feedback file at {feedback_path}: {e}"
+        packed = _pack_summary(f"Rejected — feedback at {feedback_path}", PLAN_REJECTED)
+        _upsert_artifact(ws_id, project_name, ATYPE_PLAN,
+                         "implementation_plan.md", plan_content, summary=packed)
+        set_phase(ws_id, "plan_draft")
+        return (
+            f"REJECTED — feedback attached below.\n"
+            f"   feedback file: {feedback_path}\n\n"
+            f"{diff_text}\n\n"
+            f"➡️  REQUIRED NEXT STEP: revise implementation_plan.md addressing the "
+            f"feedback above, then call workspace_init_and_review(cwd=\"{cwd}\", "
+            f"plan_content=<revised plan>) again."
+        )
+
+    return (
+        f"[workspace_init_and_review] Unrecognised verdict on {_TOPIC_STATUS}: {verdict!r}\n"
+        f"Expected 'APPROVE' or 'REJECT SEE FEEDBACK <path>'."
     )
 
 

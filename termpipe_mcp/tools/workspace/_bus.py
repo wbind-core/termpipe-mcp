@@ -37,6 +37,17 @@ _TOPIC_FEEDBACK       = "termpipe.workspace.feedback"
 _TOPIC_APPROVED       = "termpipe.workspace.approved"
 _TOPIC_REJECTED       = "termpipe.workspace.rejected"
 
+# Single-topic verdict channel — the PySide6 review sidecar publishes here.
+# Payload is either the literal string "APPROVE", or "REJECT SEE FEEDBACK <path>"
+# where <path> points to a unified-diff artifact with the reviewer's inline
+# comments interwoven. workspace_init_and_review is the sole consumer.
+_TOPIC_STATUS         = "termpipe.workspace.status"
+
+# Stable pointer to whichever plan is currently pending review — lets external
+# consumers (hotkey scripts, etc.) resolve "what's pending and where's the file"
+# without depending on the internal review_request JSON schema.
+_TOPIC_LATEST         = "termpipe.workspace.latest"
+
 # Plan status constants
 PLAN_DRAFT            = "draft"
 PLAN_PENDING_APPROVAL = "pending_approval"
@@ -136,11 +147,14 @@ def _bus_get_pattern(pattern: str) -> dict[str, str]:
     return _bus_get_multi(matched)
 
 
-def _bus_poll(topics: list[str], timeout_ms: int = 45000) -> tuple[str, str] | None:
+def _bus_poll(topics: list[str], timeout_ms: int | None = 45000) -> tuple[str, str] | None:
     """
     Block until any of the given topics receives a new message.
     Returns (topic, data) or None on timeout.
-    
+
+    timeout_ms=None means block indefinitely (no timeout at all) —
+    used for approval gates where the human review time is unbounded.
+
     This implementation uses 'sub' (streaming) to wait for the next message.
     """
     import time
@@ -153,7 +167,7 @@ def _bus_poll(topics: list[str], timeout_ms: int = 45000) -> tuple[str, str] | N
         t = topics[0]
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                s.settimeout(timeout_ms / 1000.0)
+                s.settimeout(None if timeout_ms is None else timeout_ms / 1000.0)
                 s.connect(str(_KC_SOCK))
                 # Send 'sub' for the topic
                 msg = json.dumps({"op": "sub", "topic": t}) + "\n"
@@ -185,8 +199,8 @@ def _bus_poll(topics: list[str], timeout_ms: int = 45000) -> tuple[str, str] | N
     # Given the current use cases, we'll implement a robust sequential poll
     # but try to use 'sub' where possible.
     
-    deadline = time.monotonic() + timeout_ms / 1000.0
-    while time.monotonic() < deadline:
+    deadline = None if timeout_ms is None else time.monotonic() + timeout_ms / 1000.0
+    while deadline is None or time.monotonic() < deadline:
         for t in topics:
             data = _bus_get(t)
             if data:
