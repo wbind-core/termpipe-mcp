@@ -21,4 +21,5 @@ from . import (
     web_fetch,
     # gtt,       # disabled: GTT toolkit not yet fully deployed — re-enable by uncommenting
     workspace,
+    atspi,
 )
