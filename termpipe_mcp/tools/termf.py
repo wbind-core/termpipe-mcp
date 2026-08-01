@@ -15,6 +15,8 @@ from pathlib import Path
 from termpipe_mcp.helpers import api_post
 from termpipe_mcp.tools.process import process_manager
 
+import live_exec as _live_exec
+
 
 @dataclass
 class TerminalSession:
@@ -328,130 +330,116 @@ def register_tools(mcp):
                 return f"{response}\\n[Debug assist failed]: {e}"
 
     @mcp.tool()
-    def termf_live_exec(command: str, pane_id: str = "") -> str:
+    def termf_live_exec(command: str, app_name: str = "Ghostty", timeout_ms: Optional[int] = None) -> str:
         """
-        Inject a command into a live WezTerm pane via 'wezterm cli send-text'.
+        Inject a command into a live GUI terminal (Ghostty by default) via the
+        canonical live_exec pipeline: apps (focus-or-launch) -> kb copy ->
+        cond --text-type "$(kb paste)" -> kb wait terminal.output -> kb copy history.
 
-        Sends the command text followed by Enter directly into the target pane,
-        as if the user typed it. Requires WezTerm to be running.
+        Blocks until the command's output has been captured off the kb bus, then
+        returns that output directly as this tool's result.
 
         Args:
-            command:  Shell command to inject
-            pane_id:  WezTerm pane ID to target. Defaults to $WEZTERM_PANE
-                      (the pane that launched this MCP server). Run
-                      'wezterm cli list' to enumerate available panes.
+            command:    Shell command to inject into the terminal
+            app_name:   App to focus-or-launch via `apps` (default: Ghostty)
+            timeout_ms: Optional max wait for output on the kb bus (default: no timeout)
 
         Returns:
-            Confirmation of injection (fire-and-forget; output appears in the pane)
+            Captured command output from the kb bus (blocking)
         """
-        import subprocess
-        import os
-
-        # WEZTERM_UNIX_SOCKET is the canonical availability check (set by WezTerm in all child envs)
-        if not os.environ.get("WEZTERM_UNIX_SOCKET") and not os.environ.get("WEZTERM_PANE"):
-            return "❌ Not running inside WezTerm (WEZTERM_UNIX_SOCKET not set)."
-
-        target = pane_id or os.environ.get("WEZTERM_PANE", "")
-        if not target:
-            return (
-                "❌ No pane ID: pass pane_id or set $WEZTERM_PANE. "
-                "Run 'wezterm cli list' to find pane IDs."
-            )
-
         try:
-            # Append \n directly — single call, no separate Enter (per wezterm CLI convention)
-            result = subprocess.run(
-                ["wezterm", "cli", "send-text", "--pane-id", target, "--no-paste", "--", command + "\n"],
-                capture_output=True, text=True, timeout=10
+            output = _live_exec.send_command(
+                command,
+                app_name=app_name,
+                wait_timeout_ms=timeout_ms,
             )
-            if result.returncode != 0:
-                return f"❌ send-text failed: {result.stderr.strip()}"
-
-            return f"✅ Injected into pane {target}:\n$ {command}"
-        except FileNotFoundError:
-            return "❌ 'wezterm' binary not found in PATH."
         except Exception as e:
             return f"❌ termf_live_exec failed: {str(e)}"
 
-    @mcp.tool()
-    def termf_live_continue(session_id: str, command: str) -> str:
-        """
-        Execute another command in an existing terminal session.
-        
-        Args:
-            session_id: Session ID from termf_live_exec
-            command: Next command to execute
-        
-        Returns:
-            Command output
-        """
-        terminator = get_terminator()
-        session = terminator._active_sessions.get(session_id)
-        
-        if not session:
-            return f"❌ Session {session_id} not found. Use termf_list_sessions() to see active sessions."
-        
-        # Focus the terminal
-        focus_cmd = f"{terminator._cond} --launch {session.terminal_type}"
-        subprocess.run(focus_cmd, shell=True, capture_output=True)
-        time.sleep(0.1)
-        
-        # Send command
-        if not terminator.send_command(command):
-            return f"❌ Failed to send command to session {session_id}"
-        
-        time.sleep(0.3)
-        output = terminator.get_command_output(5000)
-        
-        session.last_command = command
-        session.last_output = output
-        
-        return f"""📋 Command output for session {session_id}
-$ {command}
+        if not output:
+            return f"⚠️ Injected into {app_name} but no output captured on kb bus:\n$ {command}"
 
-{output if output else '[No output produced]'}"""
+        return f"$ {command}\n\n{output}"
 
-    @mcp.tool()
-    def termf_live_output(session_id: Optional[str] = None) -> str:
-        """
-        Retrieve latest output from a terminal session.
-        
-        Args:
-            session_id: Optional session ID. If omitted, returns most recent output.
-        
-        Returns:
-            Latest terminal output
-        """
-        terminator = get_terminator()
-        
-        if session_id:
-            output = terminator.get_session_output(session_id)
-            if output is None:
-                return f"❌ Session {session_id} not found"
-            return output if output else "[No output available]"
-        
-        # Return most recent output from kb bus
-        return terminator._kb_get("terminal.output", 2000) or "[No output on bus]"
-
-    @mcp.tool()
-    def termf_list_sessions() -> str:
-        """List all active terminal sessions."""
-        terminator = get_terminator()
-        sessions = terminator.list_sessions()
-        
-        if not sessions:
-            return "No active terminal sessions."
-        
-        result = "📱 Active Terminal Sessions:\n\n"
-        for s in sessions:
-            result += f"  🔹 {s['session_id']}\n"
-            result += f"     Terminal: {s['terminal']}\n"
-            result += f"     Last command: {s['last_command']}\n"
-            result += f"     Age: {s['age_seconds']:.0f}s\n\n"
-        
-        result += "💡 Use termf_live_continue('<session_id>', 'command') to run more commands"
-        return result
-
+#     @mcp.tool()
+#     def termf_live_continue(session_id: str, command: str) -> str:
+#         """
+#         Execute another command in an existing terminal session.
+#         
+#         Args:
+#             session_id: Session ID from termf_live_exec
+#             command: Next command to execute
+#         
+#         Returns:
+#             Command output
+#         """
+#         terminator = get_terminator()
+#         session = terminator._active_sessions.get(session_id)
+#         
+#         if not session:
+#             return f"❌ Session {session_id} not found. Use termf_list_sessions() to see active sessions."
+#         
+#         # Focus the terminal
+#         focus_cmd = f"{terminator._cond} --launch {session.terminal_type}"
+#         subprocess.run(focus_cmd, shell=True, capture_output=True)
+#         time.sleep(0.1)
+#         
+#         # Send command
+#         if not terminator.send_command(command):
+#             return f"❌ Failed to send command to session {session_id}"
+#         
+#         time.sleep(0.3)
+#         output = terminator.get_command_output(5000)
+#         
+#         session.last_command = command
+#         session.last_output = output
+#         
+#         return f"""📋 Command output for session {session_id}
+# $ {command}
+# 
+# {output if output else '[No output produced]'}"""
+# 
+#     @mcp.tool()
+#     def termf_live_output(session_id: Optional[str] = None) -> str:
+#         """
+#         Retrieve latest output from a terminal session.
+#         
+#         Args:
+#             session_id: Optional session ID. If omitted, returns most recent output.
+#         
+#         Returns:
+#             Latest terminal output
+#         """
+#         terminator = get_terminator()
+#         
+#         if session_id:
+#             output = terminator.get_session_output(session_id)
+#             if output is None:
+#                 return f"❌ Session {session_id} not found"
+#             return output if output else "[No output available]"
+#         
+#         # Return most recent output from kb bus
+#         return terminator._kb_get("terminal.output", 2000) or "[No output on bus]"
+# 
+#     @mcp.tool()
+#     def termf_list_sessions() -> str:
+#         """List all active terminal sessions."""
+#         terminator = get_terminator()
+#         sessions = terminator.list_sessions()
+#         
+#         if not sessions:
+#             return "No active terminal sessions."
+#         
+#         result = "📱 Active Terminal Sessions:\n\n"
+#         for s in sessions:
+#             result += f"  🔹 {s['session_id']}\n"
+#             result += f"     Terminal: {s['terminal']}\n"
+#             result += f"     Last command: {s['last_command']}\n"
+#             result += f"     Age: {s['age_seconds']:.0f}s\n\n"
+#         
+#         result += "💡 Use termf_live_continue('<session_id>', 'command') to run more commands"
+#         return result
+# 
     @mcp.tool()
     def termf_nlp(instruction: str) -> str:
         """
@@ -499,80 +487,80 @@ $ {command}
         else:
             return f"Generated but failed to save:\n\n{code}\n\n[Error: {save_result.get('error')}]"
 
-    @mcp.tool()
-    def termf_hsp_pipeline(command: str, task_description: str, 
-                           terminal: str = "kitty", max_loops: int = 3) -> str:
-        """
-        Run command through HSP micro-pipeline for automatic error correction.
-        
-        This implements the full 1-2-3-4 HSP pattern:
-        1. Execute command in terminal
-        2. Analyze output for errors
-        3. Suggest and apply fixes
-        4. Re-execute and verify
-        5. Loop until success or max_loops
-        
-        Args:
-            command: Initial command to try
-            task_description: What the command is supposed to do (for error context)
-            terminal: Terminal emulator to use
-            max_loops: Maximum repair attempts
-        
-        Returns:
-            Success/failure with full execution history
-        """
-        terminator = get_terminator()
-        history = []
-        current_command = command
-        
-        for loop in range(max_loops):
-            # Execute the command
-            result = terminator.execute_live(current_command, terminal, 60000)
-            history.append({
-                "loop": loop + 1,
-                "command": current_command,
-                "output": result["output"],
-                "success": result["success"]
-            })
-            
-            if result["success"] and not result["error"]:
-                # Parse output to check for implicit failures (error messages, non-zero exit indicators)
-                output_lower = result["output"].lower()
-                has_error_indicators = any(
-                    indicator in output_lower 
-                    for indicator in ["error:", "failed:", "exception:", "traceback", "command not found"]
-                )
-                
-                if not has_error_indicators:
-                    return f"""✅ HSP Pipeline succeeded after {loop + 1} loop(s)
-
-Final command: {current_command}
-
-Execution history:
-{chr(10).join(f"  Loop {h['loop']}: {h['command'][:60]}{'...' if len(h['command']) > 60 else ''} → {'✅' if h['success'] else '❌'}" for h in history)}
-
-Full output:
-{result['output']}"""
-            
-            # If we failed or have error indicators, attempt repair
-            if loop < max_loops - 1:
-                # Use analyst to diagnose and suggest fix
-                analyst_prompt = f"""
-Task: {task_description}
-Command attempted: {current_command}
-Output/Error: {result['output'][:2000]}
-
-Analyze the error and suggest a corrected command.
-Return ONLY the corrected shell command, no explanation.
-"""
-                # This would call an LLM for analysis - simplified for now
-                # In production, this would use HSP's analyst model
-                suggested_fix = result["output"][:500]  # Placeholder
-                current_command = f"{current_command} 2>&1 | tee /tmp/fix.log"  # Placeholder
-            
-        return f"""⚠️ HSP Pipeline exhausted after {max_loops} loops
-
-Last attempt: {current_command}
-Output: {history[-1]['output'][:1000] if history[-1]['output'] else '[No output]'}
-
-Consider manual intervention or termf_live_exec for interactive debugging."""
+#     @mcp.tool()
+#     def termf_hsp_pipeline(command: str, task_description: str, 
+#                            terminal: str = "kitty", max_loops: int = 3) -> str:
+#         """
+#         Run command through HSP micro-pipeline for automatic error correction.
+#         
+#         This implements the full 1-2-3-4 HSP pattern:
+#         1. Execute command in terminal
+#         2. Analyze output for errors
+#         3. Suggest and apply fixes
+#         4. Re-execute and verify
+#         5. Loop until success or max_loops
+#         
+#         Args:
+#             command: Initial command to try
+#             task_description: What the command is supposed to do (for error context)
+#             terminal: Terminal emulator to use
+#             max_loops: Maximum repair attempts
+#         
+#         Returns:
+#             Success/failure with full execution history
+#         """
+#         terminator = get_terminator()
+#         history = []
+#         current_command = command
+#         
+#         for loop in range(max_loops):
+#             # Execute the command
+#             result = terminator.execute_live(current_command, terminal, 60000)
+#             history.append({
+#                 "loop": loop + 1,
+#                 "command": current_command,
+#                 "output": result["output"],
+#                 "success": result["success"]
+#             })
+#             
+#             if result["success"] and not result["error"]:
+#                 # Parse output to check for implicit failures (error messages, non-zero exit indicators)
+#                 output_lower = result["output"].lower()
+#                 has_error_indicators = any(
+#                     indicator in output_lower 
+#                     for indicator in ["error:", "failed:", "exception:", "traceback", "command not found"]
+#                 )
+#                 
+#                 if not has_error_indicators:
+#                     return f"""✅ HSP Pipeline succeeded after {loop + 1} loop(s)
+# 
+# Final command: {current_command}
+# 
+# Execution history:
+# {chr(10).join(f"  Loop {h['loop']}: {h['command'][:60]}{'...' if len(h['command']) > 60 else ''} → {'✅' if h['success'] else '❌'}" for h in history)}
+# 
+# Full output:
+# {result['output']}"""
+#             
+#             # If we failed or have error indicators, attempt repair
+#             if loop < max_loops - 1:
+#                 # Use analyst to diagnose and suggest fix
+#                 analyst_prompt = f"""
+# Task: {task_description}
+# Command attempted: {current_command}
+# Output/Error: {result['output'][:2000]}
+# 
+# Analyze the error and suggest a corrected command.
+# Return ONLY the corrected shell command, no explanation.
+# """
+#                 # This would call an LLM for analysis - simplified for now
+#                 # In production, this would use HSP's analyst model
+#                 suggested_fix = result["output"][:500]  # Placeholder
+#                 current_command = f"{current_command} 2>&1 | tee /tmp/fix.log"  # Placeholder
+#             
+#         return f"""⚠️ HSP Pipeline exhausted after {max_loops} loops
+# 
+# Last attempt: {current_command}
+# Output: {history[-1]['output'][:1000] if history[-1]['output'] else '[No output]'}
+# 
+# Consider manual intervention or termf_live_exec for interactive debugging."""
