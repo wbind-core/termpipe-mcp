@@ -84,3 +84,6 @@ windows/
 android/
 linux/
 django/
+
+# Vendored third-party clone (own git repo at shimondoodkin/screenmcp-claude-plugin)
+termpipe_mcp/screenmcp-claude-plugin/
