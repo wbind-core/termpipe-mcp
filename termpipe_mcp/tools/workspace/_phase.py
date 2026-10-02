@@ -33,30 +33,33 @@ WRITE_UNLOCKED_PHASES = {"task_in_progress"}
 NEXT_ACTION = {
     "no_plan": (
         "No implementation plan exists yet.\n"
-        "   ➡️  REQUIRED: Call workspace_plan_update(cwd=..., content=..., status='active') "
-        "before any write tools can be used."
+        "   ➡️  REQUIRED: Call workspace_plan(cwd=..., action=\"init_review\", "
+        "goal=..., plan_content=...) to create the plan and submit it for review."
     ),
     "plan_draft": (
         "Implementation plan is drafted but not yet reviewed.\n"
-        "   ➡️  REQUIRED: Call workspace_request_review(cwd=...) to submit for approval."
+        "   ➡️  REQUIRED: Call workspace_plan(cwd=..., action=\"init_review\", "
+        "plan_content=...) to submit for approval and block until the verdict arrives."
     ),
     "pending_approval": (
         "Plan submitted — awaiting human approval.\n"
-        "   ➡️  REQUIRED: Call workspace_await_approval(cwd=...) to block until approved."
+        "   ➡️  REQUIRED: Call workspace_plan(cwd=..., action=\"init_review\", "
+        "plan_content=...) to re-publish and block until the verdict arrives."
     ),
     "approved": (
         "Plan approved. Create or select a task to begin work.\n"
-        "   ➡️  REQUIRED: Call workspace_task_create(cwd=...) or "
-        "workspace_task_set_status(cwd=..., task_id=..., status='in_progress')."
+        "   ➡️  REQUIRED: Call workspace_task(cwd=..., action=\"create\", title=...) or "
+        "workspace_task(cwd=..., action=\"set_status\", task_id=..., status=\"in_progress\")."
     ),
     "task_in_progress": (
         "Task in progress — write tools UNLOCKED.\n"
-        "   ➡️  When done: Call workspace_task_set_status(cwd=..., task_id=..., status='needs_review')."
+        "   ➡️  When done: Call workspace_task(cwd=..., action=\"set_status\", "
+        "task_id=..., status=\"needs_review\")."
     ),
     "task_needs_review": (
         "Task complete — awaiting review.\n"
-        "   ➡️  REQUIRED: Call workspace_task_request_review(cwd=..., task_id=...) "
-        "then workspace_await_task_approval(...)."
+        "   ➡️  REQUIRED: Call workspace_task(cwd=..., action=\"request_review\", task_id=...) "
+        "then workspace_task(cwd=..., action=\"await_approval\", task_id=...)."
     ),
 }
 
@@ -157,8 +160,8 @@ def record_write_op(ws_id: str) -> dict:
 
 CHECKPOINT_PROMPT = (
     "\n\n⚠️  SESSION CHECKPOINT ({count} write ops): "
-    "Call workspace_doc_update or session_end with a 2-3 sentence summary "
-    "of what has been accomplished. Do not skip this."
+    "Call workspace_plan(cwd=..., action=\"doc\", name=..., content=...) with a 2-3 "
+    "sentence summary of what has been accomplished. Do not skip this."
 )
 
 
