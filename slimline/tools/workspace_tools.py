@@ -187,10 +187,19 @@ def register_tools(mcp):
                 return "[workspace_task] action='set_status' requires task_id."
             if not status:
                 return "[workspace_task] action='set_status' requires status."
-            return _ws_gated(
+            result = _ws_gated(
                 cwd, _task_ops.workspace_task_set_status,
                 task_id=task_id, status=status, notes=notes,
             )
+            if status == "done":
+                try:
+                    from slimline.tools import session_memory
+                    session_memory.log_event(
+                        cwd, "task", f"task #{task_id} marked done"
+                        + (f": {notes[:200]}" if notes else ""))
+                except Exception:
+                    pass
+            return result
         if action == "query":
             return _task_ops.workspace_task_query(
                 cwd=cwd, status=status, priority=priority, task_type=task_type,

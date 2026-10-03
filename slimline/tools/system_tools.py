@@ -132,6 +132,19 @@ def register_tools(mcp: FastMCP):
             except Exception as e:
                 output_parts.append(f"(workspace resume skipped: {e})")
 
+        # 2d. Session memory (context-core slice). list_tools is the semantic
+        # resume trigger: touch the cwd-scoped session and append the
+        # significance-ranked resume briefing. Zero-cost on failure.
+        if str(target_path) != "/":
+            try:
+                from slimline.tools import session_memory
+                session_memory.touch_session(str(target_path))
+                _brief = session_memory.briefing(str(target_path))
+                if _brief:
+                    output_parts.append("\n" + _brief)
+            except Exception as e:
+                output_parts.append(f"(session memory skipped: {e})")
+
         # 3. List tools dynamically from FastMCP router
         output_parts.append("\nAvailable Tools:")
         try:

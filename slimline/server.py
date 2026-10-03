@@ -14,13 +14,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from mcp.server.fastmcp import FastMCP
 import slimline.tools as _tools
-from slimline.tools import files_tools, edit_tools, exec_tools, system_tools, codegraph_tools, speak_tools, override_tools, workspace_tools
+from slimline.tools import files_tools, edit_tools, exec_tools, system_tools, codegraph_tools, speak_tools, override_tools, workspace_tools, session_memory
 
 # Initialize MCP server
 mcp = FastMCP("termpipe-slimline")
 
 # Dynamically import and register all tool modules from slimline.tools
-modules = [files_tools, edit_tools, exec_tools, system_tools, codegraph_tools, speak_tools, override_tools, workspace_tools]
+modules = [files_tools, edit_tools, exec_tools, system_tools, codegraph_tools, speak_tools, override_tools, workspace_tools, session_memory]
 
 for _mod in modules:
     if hasattr(_mod, "register_tools"):
