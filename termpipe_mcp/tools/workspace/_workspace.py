@@ -54,7 +54,8 @@ def workspace_status(cwd: str) -> str:
     elif plan_status == PLAN_DRAFT:
         out += (
             f"\n  ℹ️  Plan not yet submitted for review.\n"
-            f"     Call workspace_request_review(cwd) when plan is ready.\n"
+            f"     Call workspace_plan(cwd=cwd, action=\"init_review\", plan_content=...) "
+            f"when the plan is ready.\n"
         )
 
     out += "=" * 60 + "\n\n"
