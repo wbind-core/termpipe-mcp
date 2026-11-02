@@ -5,10 +5,14 @@ Implements a 5-tool reductive pipeline: Plan -> Query -> Control -> Observe -> I
 
 import json
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional, List
 
-# In-memory store for the sidecar
+# In-memory store for the sidecar. Accessed from multiple tool calls that
+# could in principle overlap (MCP doesn't guarantee serialized calls), so
+# all reads/writes go through _STATE_LOCK.
+_STATE_LOCK = threading.Lock()
 _ATSPI_PLAN_STATE = {
     "expected_chain": [],
     "expected_outcome": "",
@@ -57,7 +61,6 @@ def register_tools(mcp):
             actual_outcome: What actually happened. Required for log_deviation.
             delta_notes: Analysis of why reality deviated from expectation.
         """
-        global _ATSPI_PLAN_STATE
         if action_mode == "plan_chain":
             if not expected_chain or not expected_outcome:
                 return "Error: expected_chain and expected_outcome are required for plan_chain."
@@ -70,24 +73,26 @@ def register_tools(mcp):
             except:
                 chain = [expected_chain]
                 
-            _ATSPI_PLAN_STATE["expected_chain"] = chain
-            _ATSPI_PLAN_STATE["expected_outcome"] = expected_outcome
+            with _STATE_LOCK:
+                _ATSPI_PLAN_STATE["expected_chain"] = chain
+                _ATSPI_PLAN_STATE["expected_outcome"] = expected_outcome
             return f"✅ Plan anchored. Ready to execute {len(chain)} steps. Expected outcome: {expected_outcome}"
             
         elif action_mode == "log_deviation":
             if not actual_outcome:
                 return "Error: actual_outcome is required for log_deviation."
                 
-            log_entry = {
-                "expected_chain": _ATSPI_PLAN_STATE.get("expected_chain"),
-                "expected_outcome": _ATSPI_PLAN_STATE.get("expected_outcome"),
-                "actual_outcome": actual_outcome,
-                "delta_notes": delta_notes or "None"
-            }
-            _ATSPI_PLAN_STATE["logs"].append(log_entry)
-            
-            _ATSPI_PLAN_STATE["expected_chain"] = []
-            _ATSPI_PLAN_STATE["expected_outcome"] = ""
+            with _STATE_LOCK:
+                log_entry = {
+                    "expected_chain": _ATSPI_PLAN_STATE.get("expected_chain"),
+                    "expected_outcome": _ATSPI_PLAN_STATE.get("expected_outcome"),
+                    "actual_outcome": actual_outcome,
+                    "delta_notes": delta_notes or "None"
+                }
+                _ATSPI_PLAN_STATE["logs"].append(log_entry)
+                
+                _ATSPI_PLAN_STATE["expected_chain"] = []
+                _ATSPI_PLAN_STATE["expected_outcome"] = ""
             
             return "✅ Execution delta logged successfully. Sidecar reset."
         
@@ -125,8 +130,15 @@ def register_tools(mcp):
             lines.append(f"  • {el['id']} : {el['name']} (Role: {el['role']})")
             
         lines.append("\n👉 Note: Pass the ID (e.g. 'b1') to atspi_remote_control to interact with the element.")
-        # Store mapping in memory so remote_control can resolve the real AT-SPI path
-        _ATSPI_PLAN_STATE["current_mapping"] = {el["id"]: el["real_path"] for el in elements}
+        # Store mapping in memory so remote_control/read_state can resolve the
+        # real AT-SPI path. Also stash name+role captured at query time so
+        # consumers can verify the node hasn't shifted before acting on it
+        # (index-based paths go stale if the UI tree reshapes in between).
+        with _STATE_LOCK:
+            _ATSPI_PLAN_STATE["current_mapping"] = {
+                el["id"]: {"real_path": el["real_path"], "name": el["name"], "role": el["role"]}
+                for el in elements
+            }
         
         return "\n".join(lines)
 
@@ -142,19 +154,31 @@ def register_tools(mcp):
         
         Args:
             element_id: The short ID from the query tool (e.g., "b1", "t2").
-            action: "click", "type", "focus", "close".
+            action: "click", "type", "focus", "close". "type" focuses the element via
+                    AT-SPI then injects keystrokes via wput's uinput backend, so it works
+                    regardless of whether the widget implements AT-SPI's EditableText.
             payload: String payload if action is "type".
         """
-        mapping = _ATSPI_PLAN_STATE.get("current_mapping", {})
+        with _STATE_LOCK:
+            mapping = dict(_ATSPI_PLAN_STATE.get("current_mapping", {}))
         if element_id not in mapping:
             return f"Error: Element ID '{element_id}' not found in current session memory. Please run atspi_query_domain first."
             
-        real_path = mapping[element_id]
+        entry = mapping[element_id]
         
-        # Fire to helper
-        res = run_helper("remote_control", real_path, action, payload or "")
+        # Verify the node at real_path still matches what we saw at query
+        # time before acting on it — index-based paths go stale if the UI
+        # tree reshapes between query and control (popup opened, list
+        # re-sorted, item removed, etc).
+        res = run_helper("remote_control", entry["real_path"], action, payload or "",
+                          entry.get("name", ""), entry.get("role", ""))
         if "error" in res:
             return f"❌ Failed to {action} {element_id}: {res['error']}"
+        if res.get("stale"):
+            return (f"❌ Element ID '{element_id}' is stale — the UI tree changed since "
+                     f"atspi_query_domain ran (expected '{entry.get('name')}' / "
+                     f"{entry.get('role')}, found '{res.get('found_name')}' / "
+                     f"{res.get('found_role')}). Re-run atspi_query_domain and retry.")
             
         return f"✅ Success: {res.get('message', 'Action executed.')}"
 
@@ -193,14 +217,20 @@ def register_tools(mcp):
         Args:
             element_id: The short ID from the query tool (e.g., "x1", "t1").
         """
-        mapping = _ATSPI_PLAN_STATE.get("current_mapping", {})
+        with _STATE_LOCK:
+            mapping = dict(_ATSPI_PLAN_STATE.get("current_mapping", {}))
         if element_id not in mapping:
             return f"Error: Element ID '{element_id}' not found. Please run atspi_query_domain first."
             
-        real_path = mapping[element_id]
-        res = run_helper("read_state", real_path)
+        entry = mapping[element_id]
+        res = run_helper("read_state", entry["real_path"], entry.get("name", ""), entry.get("role", ""))
         
         if "error" in res:
             return f"❌ Inspection failed: {res['error']}"
+        if res.get("stale"):
+            return (f"❌ Element ID '{element_id}' is stale — the UI tree changed since "
+                     f"atspi_query_domain ran (expected '{entry.get('name')}' / "
+                     f"{entry.get('role')}, found '{res.get('found_name')}' / "
+                     f"{res.get('found_role')}). Re-run atspi_query_domain and retry.")
             
         return json.dumps(res, indent=2)

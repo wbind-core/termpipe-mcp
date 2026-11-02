@@ -41,6 +41,19 @@ def register_tools(mcp: FastMCP):
         if str(target_path) == "/":
             output_parts.append("ℹ️ Skipped CodeGraph indexing: current working directory is root ('/'). Pass a project path to index.")
         else:
+            # 0. Publish this workspace as the active session cwd on the kb bus
+            # so cwd-aware tools (codegraph_explore, ...) resolve it. Zero-cost
+            # on kb failure.
+            try:
+                from slimline.agent_mode import KbClient
+                from slimline.session import publish_session_cwd
+                _sid = publish_session_cwd(KbClient(), str(target_path))
+                output_parts.append(
+                    f"Session {_sid}: cwd published to termpipe.session{_sid}.cwd"
+                )
+            except Exception as e:
+                output_parts.append(f"(session publish skipped: {e})")
+
             codegraph_dir = target_path / ".codegraph"
             index_succeeded = False
             
@@ -52,7 +65,7 @@ def register_tools(mcp: FastMCP):
                         ["codegraph", "init", str(target_path)],
                         capture_output=True,
                         text=True,
-                        timeout=30
+                        timeout=300
                     )
                 else:
                     output_parts.append(f"Updating CodeGraph index in {target_path}...")
@@ -60,7 +73,7 @@ def register_tools(mcp: FastMCP):
                         ["codegraph", "index", str(target_path)],
                         capture_output=True,
                         text=True,
-                        timeout=30
+                        timeout=300
                     )
 
                 if res.returncode == 0:

@@ -1,0 +1,473 @@
+//! Integration tests for the MCP tool workflows.
+//!
+//! Because `pensyve-mcp` is a binary crate, we cannot import its internal
+//! `PensyveState` or the generated tool-router types.  Instead we replicate
+//! the exact same pensyve-core operations that each tool handler performs,
+//! exercising the full storage / embedding / persisted-index stack with a
+//! temporary `SQLite` database.
+
+use std::sync::Arc;
+
+use pensyve_core::config::RetrievalConfig;
+use pensyve_core::embedding::OnnxEmbedder;
+use pensyve_core::embedding_space::EmbeddingSpace;
+use pensyve_core::retrieval::RecallEngine;
+use pensyve_core::storage::bounded::{MemoryRef, embedding_source_text};
+use pensyve_core::storage::sqlite::SqliteBackend;
+use pensyve_core::storage::{StorageTrait, embedding_record_for_memory};
+use pensyve_core::types::{
+    Entity, EntityKind, Episode, Memory, Namespace, Outcome, SemanticMemory,
+};
+use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+/// Mirrors the startup sequence in `main()` but uses a temp directory and the
+/// mock embedder so no model download is required.
+struct TestState {
+    storage: Arc<SqliteBackend>,
+    embedder: OnnxEmbedder,
+    runtime_space: EmbeddingSpace,
+    namespace: Namespace,
+    retrieval_config: RetrievalConfig,
+    _tmpdir: tempfile::TempDir,
+}
+
+impl TestState {
+    fn new() -> Self {
+        let tmpdir = tempfile::TempDir::new().expect("create temp dir");
+        let storage =
+            Arc::new(SqliteBackend::open(tmpdir.path()).expect("open sqlite in temp dir"));
+
+        // Use the mock embedder (no ONNX model needed).
+        let embedder = OnnxEmbedder::new_mock(768);
+        let namespace = Namespace::new("test");
+        storage.save_namespace(&namespace).expect("save namespace");
+        let runtime_space = embedder
+            .embedding_space()
+            .expect("mock runtime space")
+            .clone();
+        storage
+            .initialize_local_runtime_space(namespace.id, &runtime_space)
+            .expect("activate empty local runtime space");
+
+        let retrieval_config = RetrievalConfig {
+            default_limit: 5,
+            max_candidates: 100,
+            weights: [0.30, 0.15, 0.20, 0.10, 0.10, 0.05, 0.05, 0.05],
+            recall_timeout_secs: 5,
+            rrf_k: 60,
+            rrf_weights: [1.0, 0.8, 1.0, 0.8, 0.5, 0.5, 1.2, 1.0],
+            beam_width: 10,
+            max_depth: 4,
+        };
+
+        Self {
+            storage,
+            embedder,
+            runtime_space,
+            namespace,
+            retrieval_config,
+            _tmpdir: tmpdir,
+        }
+    }
+
+    /// Replicate the "get or create entity" logic used by `remember` and `episode_start`.
+    fn get_or_create_entity(&self, name: &str) -> Entity {
+        if let Some(e) = self
+            .storage
+            .get_entity_by_name(name, self.namespace.id)
+            .expect("storage lookup")
+        {
+            e
+        } else {
+            let mut e = Entity::new(name, EntityKind::Agent);
+            e.namespace_id = self.namespace.id;
+            self.storage.save_entity(&e).expect("save entity");
+            e
+        }
+    }
+
+    /// Embeds the memory's canonical source text so the stored vector and the
+    /// record's provenance hash describe the same document.
+    fn save_semantic_with_embedding(&self, semantic: SemanticMemory) {
+        let mut memory = Memory::Semantic(semantic);
+        let embedding = self
+            .embedder
+            .embed(&embedding_source_text(&memory))
+            .expect("mock embed");
+        if let Memory::Semantic(semantic) = &mut memory {
+            semantic.embedding.clone_from(&embedding);
+        }
+        let record = embedding_record_for_memory(&memory, &self.runtime_space, embedding);
+        self.storage
+            .save_memory_with_embedding(&memory, Some(&record))
+            .expect("save source and embedding");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// pensyve_remember workflow
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_remember_creates_semantic_memory() {
+    let state = TestState::new();
+
+    // Get or create entity (same as the tool handler).
+    let entity = state.get_or_create_entity("alice");
+
+    let fact = "likes Rust programming";
+    let confidence = 0.9_f32;
+
+    // Split fact into predicate + object.
+    let (predicate, object) = if let Some(pos) = fact.find(' ') {
+        (fact[..pos].to_string(), fact[pos + 1..].to_string())
+    } else {
+        ("knows".to_string(), fact.to_string())
+    };
+
+    let mut mem = SemanticMemory::new(
+        state.namespace.id,
+        entity.id,
+        predicate.clone(),
+        object.clone(),
+        confidence,
+    );
+
+    // Generate and transactionally persist the source plus embedding record.
+    let embedding = state.embedder.embed(fact).expect("mock embed");
+    mem.embedding.clone_from(&embedding);
+    let memory = Memory::Semantic(mem.clone());
+    let record = embedding_record_for_memory(&memory, &state.runtime_space, embedding);
+    state
+        .storage
+        .save_memory_with_embedding(&memory, Some(&record))
+        .expect("save source and embedding");
+
+    // Verify retrieval.
+    let stored = state
+        .storage
+        .list_semantic_by_entity_in_namespace(entity.id, state.namespace.id, 10)
+        .expect("list semantic");
+
+    assert_eq!(stored.len(), 1, "should have exactly one semantic memory");
+    assert_eq!(stored[0].predicate, predicate);
+    assert_eq!(stored[0].object, object);
+    assert!((stored[0].confidence - confidence).abs() < f32::EPSILON);
+    assert_eq!(stored[0].subject, entity.id);
+}
+
+// ---------------------------------------------------------------------------
+// pensyve_episode_start / pensyve_episode_end workflow
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_episode_start_and_end_lifecycle() {
+    let state = TestState::new();
+
+    // episode_start: resolve participants, create episode.
+    let alice = state.get_or_create_entity("alice");
+    let bob = state.get_or_create_entity("bob");
+
+    let episode = Episode::new(state.namespace.id, vec![alice.id, bob.id]);
+    let episode_id = episode.id;
+    state.storage.save_episode(&episode).expect("save episode");
+
+    // Verify the episode was saved by using it in episode_end.
+    // episode_end: close the episode with a success outcome.
+    let mut closing_episode = Episode::new(state.namespace.id, vec![]);
+    closing_episode.id = episode_id;
+    closing_episode.close(Outcome::Success);
+
+    state
+        .storage
+        .update_episode(&closing_episode)
+        .expect("update episode");
+
+    // Verify outcome is set.
+    assert!(
+        closing_episode.ended_at.is_some(),
+        "episode should have an end time"
+    );
+    assert!(
+        matches!(closing_episode.outcome, Some(Outcome::Success)),
+        "outcome should be Success"
+    );
+}
+
+#[tokio::test]
+async fn test_episode_end_with_failure_outcome() {
+    let state = TestState::new();
+
+    let participant = state.get_or_create_entity("carol");
+    let episode = Episode::new(state.namespace.id, vec![participant.id]);
+    let episode_id = episode.id;
+    state.storage.save_episode(&episode).expect("save episode");
+
+    let mut closing = Episode::new(state.namespace.id, vec![]);
+    closing.id = episode_id;
+    closing.close(Outcome::Failure);
+
+    state
+        .storage
+        .update_episode(&closing)
+        .expect("update episode");
+
+    assert!(matches!(closing.outcome, Some(Outcome::Failure)));
+}
+
+#[tokio::test]
+async fn test_episode_invalid_id_is_not_valid_uuid() {
+    // Replicate the validation logic at the top of `episode_end`.
+    let bad_id = "not-a-uuid";
+    let result = bad_id.parse::<Uuid>();
+    assert!(result.is_err(), "invalid UUID string should fail to parse");
+}
+
+// ---------------------------------------------------------------------------
+// pensyve_forget workflow
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_forget_removes_all_memories_for_entity() {
+    let state = TestState::new();
+
+    let entity = state.get_or_create_entity("dave");
+
+    // Store two semantic memories for this entity.
+    for i in 0..2_u32 {
+        let mem = SemanticMemory::new(
+            state.namespace.id,
+            entity.id,
+            "knows",
+            format!("fact {i}"),
+            1.0,
+        );
+        state.save_semantic_with_embedding(mem);
+    }
+
+    // Confirm they're there.
+    let before = state
+        .storage
+        .list_semantic_by_entity_in_namespace(entity.id, state.namespace.id, 10)
+        .expect("list semantic");
+    assert_eq!(before.len(), 2);
+    let refs: Vec<_> = before
+        .iter()
+        .map(|memory| MemoryRef::from_memory(&Memory::Semantic(memory.clone())))
+        .collect();
+    assert_eq!(
+        state
+            .storage
+            .load_embedding_records(state.namespace.id, &state.runtime_space.id(), &refs)
+            .expect("load embedding records")
+            .len(),
+        2
+    );
+
+    // forget: delete memories.
+    let forgotten = state
+        .storage
+        .delete_memories_by_entity(entity.id, state.namespace.id)
+        .expect("delete memories");
+    assert_eq!(forgotten, 2, "should have deleted exactly 2 memories");
+
+    // Confirm they're gone.
+    let after = state
+        .storage
+        .list_semantic_by_entity_in_namespace(entity.id, state.namespace.id, 10)
+        .expect("list semantic after delete");
+    assert!(after.is_empty(), "no memories should remain after forget");
+    assert!(
+        state
+            .storage
+            .load_embedding_records(state.namespace.id, &state.runtime_space.id(), &refs)
+            .expect("load embedding records after delete")
+            .is_empty(),
+        "storage-backed embedding rows should cascade with their sources"
+    );
+}
+
+#[tokio::test]
+async fn test_forget_entity_not_found_returns_zero() {
+    let state = TestState::new();
+
+    // Entity "nonexistent" was never created.
+    let result = state
+        .storage
+        .get_entity_by_name("nonexistent", state.namespace.id)
+        .expect("storage ok");
+
+    // Tool returns a "not found" JSON response — validate the condition.
+    assert!(result.is_none(), "unknown entity should not be found");
+}
+
+// ---------------------------------------------------------------------------
+// pensyve_inspect workflow
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_inspect_lists_semantic_memories_for_entity() {
+    let state = TestState::new();
+    let entity = state.get_or_create_entity("eve");
+
+    // Store two semantic memories.
+    for i in 0..2_u32 {
+        let mem = SemanticMemory::new(
+            state.namespace.id,
+            entity.id,
+            "knows",
+            format!("thing {i}"),
+            0.8,
+        );
+        state.save_semantic_with_embedding(mem);
+    }
+
+    let limit = 20_usize;
+    let semantics = state
+        .storage
+        .list_semantic_by_entity_in_namespace(entity.id, state.namespace.id, limit)
+        .expect("list semantic");
+
+    assert_eq!(semantics.len(), 2);
+    for m in &semantics {
+        assert_eq!(m.subject, entity.id);
+        assert_eq!(m.predicate, "knows");
+    }
+}
+
+#[tokio::test]
+async fn test_inspect_entity_not_found_returns_empty() {
+    let state = TestState::new();
+
+    let found = state
+        .storage
+        .get_entity_by_name("nobody", state.namespace.id)
+        .expect("lookup ok");
+
+    assert!(found.is_none(), "should report entity not found");
+}
+
+// ---------------------------------------------------------------------------
+// pensyve_recall workflow
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_recall_returns_stored_semantic_memory() {
+    let state = TestState::new();
+    let entity = state.get_or_create_entity("frank");
+
+    let fact = "likes hiking in the mountains";
+    let mut mem = SemanticMemory::new(
+        state.namespace.id,
+        entity.id,
+        "likes",
+        "hiking in the mountains",
+        1.0,
+    );
+    let embedding = state.embedder.embed(fact).expect("embed");
+    mem.embedding.clone_from(&embedding);
+    let memory = Memory::Semantic(mem.clone());
+    let record = embedding_record_for_memory(&memory, &state.runtime_space, embedding);
+    state
+        .storage
+        .save_memory_with_embedding(&memory, Some(&record))
+        .expect("save source and embedding");
+
+    // Run the recall engine (same as the recall tool handler).
+    let engine = RecallEngine::new_storage_backed(
+        &*state.storage,
+        &state.embedder,
+        &state.runtime_space,
+        &state.retrieval_config,
+    );
+
+    let result = engine
+        .recall("hiking mountains", state.namespace.id, 5)
+        .expect("recall");
+
+    assert!(
+        result
+            .memories
+            .iter()
+            .any(|candidate| candidate.memory_id == mem.id),
+        "recall must return the stored semantic memory"
+    );
+}
+
+#[tokio::test]
+async fn test_recall_empty_namespace_returns_no_results() {
+    let state = TestState::new();
+
+    let engine = RecallEngine::new_storage_backed(
+        &*state.storage,
+        &state.embedder,
+        &state.runtime_space,
+        &state.retrieval_config,
+    );
+
+    let result = engine
+        .recall("anything", state.namespace.id, 5)
+        .expect("recall on empty namespace");
+
+    assert!(
+        result.memories.is_empty(),
+        "empty namespace should yield no memories"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Storage initialisation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_storage_opens_and_namespace_persists() {
+    let tmpdir = tempfile::TempDir::new().expect("temp dir");
+    let storage = SqliteBackend::open(tmpdir.path()).expect("open");
+
+    let ns = Namespace::new("my-namespace");
+    let ns_id = ns.id;
+    storage.save_namespace(&ns).expect("save namespace");
+
+    let retrieved = storage
+        .get_namespace_by_name("my-namespace")
+        .expect("lookup")
+        .expect("should exist");
+
+    assert_eq!(retrieved.id, ns_id);
+    assert_eq!(retrieved.name, "my-namespace");
+}
+
+#[test]
+fn test_entity_get_or_create_is_idempotent() {
+    let tmpdir = tempfile::TempDir::new().expect("temp dir");
+    let storage = SqliteBackend::open(tmpdir.path()).expect("open");
+    let ns = Namespace::new("test-ns");
+    storage.save_namespace(&ns).expect("save ns");
+
+    // First creation.
+    let mut e1 = Entity::new("grace", EntityKind::Agent);
+    e1.namespace_id = ns.id;
+    storage.save_entity(&e1).expect("save entity");
+
+    // Subsequent lookup should return the same entity.
+    let found = storage
+        .get_entity_by_name("grace", ns.id)
+        .expect("lookup")
+        .expect("should exist");
+
+    assert_eq!(found.id, e1.id);
+    assert_eq!(found.name, "grace");
+}
+
+#[test]
+fn test_mock_embedder_produces_correct_dimensions() {
+    let embedder = OnnxEmbedder::new_mock(768);
+    assert_eq!(embedder.dimensions(), 768);
+
+    let embedding = embedder.embed("test phrase").expect("embed");
+    assert_eq!(embedding.len(), 768);
+}

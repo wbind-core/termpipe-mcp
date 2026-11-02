@@ -15,7 +15,7 @@ from pathlib import Path
 from termpipe_mcp.helpers import api_post
 from termpipe_mcp.tools.process import process_manager
 
-import live_exec as _live_exec
+# import live_exec as _live_exec
 
 
 @dataclass
@@ -261,7 +261,7 @@ def register_tools(mcp):
     """Register TermF tools with the MCP server."""
     
     @mcp.tool()
-    def termf_exec(command: str, timeout_ms: Optional[int] = None, run_in_bg: bool = False) -> str:
+    def termf_exec(command: str, timeout_ms: Optional[int] = None, run_in_bg: bool = False, app: Optional[str] = None) -> str:
         """
         Execute a shell command via TermPipe (existing method, preserved).
         
@@ -269,9 +269,32 @@ def register_tools(mcp):
             command: Shell command to execute
             timeout_ms: Optional timeout in milliseconds
             run_in_bg: Run in background and return PID
+            app: Optional application name requesting execution (for sudo whitelist)
         """
         if command.strip().startswith("sudo ") and "sudo -S" not in command:
-            command = f"echo 'bon' | sudo -S {command.strip()[5:]}"
+            sudo_pw = None
+            if app:
+                try:
+                    import subprocess
+                    whitelist_out = subprocess.check_output(
+                        ["kb", "get", "session.sudo.whitelist", "--data-only"], 
+                        text=True
+                    ).strip()
+                    if app in whitelist_out.splitlines():
+                        sudo_pw = subprocess.check_output(
+                            ["kb", "get", "session.sudo", "--data-only"], 
+                            text=True
+                        ).strip()
+                except Exception as e:
+                    pass
+            
+            if sudo_pw:
+                # Use the fetched password
+                command = f"echo '{sudo_pw}' | sudo -S {command.strip()[5:]}"
+            else:
+                if app:
+                    return f"❌ Access Denied: App '{app}' is not whitelisted for sudo execution.\nRun: echo '{app}' | kb pub session.sudo.whitelist"
+                return "❌ Access Denied: sudo commands require an 'app' parameter that is whitelisted via kb."
             
         timeout = timeout_ms / 1000.0 if timeout_ms else 120.0
 
@@ -331,35 +354,8 @@ def register_tools(mcp):
 
     @mcp.tool()
     def termf_live_exec(command: str, app_name: str = "Ghostty", timeout_ms: Optional[int] = None) -> str:
-        """
-        Inject a command into a live GUI terminal (Ghostty by default) via the
-        canonical live_exec pipeline: apps (focus-or-launch) -> kb copy ->
-        cond --text-type "$(kb paste)" -> kb wait terminal.output -> kb copy history.
-
-        Blocks until the command's output has been captured off the kb bus, then
-        returns that output directly as this tool's result.
-
-        Args:
-            command:    Shell command to inject into the terminal
-            app_name:   App to focus-or-launch via `apps` (default: Ghostty)
-            timeout_ms: Optional max wait for output on the kb bus (default: no timeout)
-
-        Returns:
-            Captured command output from the kb bus (blocking)
-        """
-        try:
-            output = _live_exec.send_command(
-                command,
-                app_name=app_name,
-                wait_timeout_ms=timeout_ms,
-            )
-        except Exception as e:
-            return f"❌ termf_live_exec failed: {str(e)}"
-
-        if not output:
-            return f"⚠️ Injected into {app_name} but no output captured on kb bus:\n$ {command}"
-
-        return f"$ {command}\n\n{output}"
+        """Disabled due to missing live_exec module."""
+        return "❌ termf_live_exec is temporarily disabled (live_exec missing)"
 
 #     @mcp.tool()
 #     def termf_live_continue(session_id: str, command: str) -> str:

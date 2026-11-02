@@ -114,7 +114,7 @@ def _send_review_notification(
             "--button", f"📄 View Plan:{_TOPIC_APPROVED}",  # opens via click handler on bus side
             "--button", f"✗ Reject:{_TOPIC_REJECTED}",
         ]
-        _sp.run(cmd, timeout=10)
+        _sp.run(cmd, timeout=10, capture_output=True)
         return True
     except Exception as e:
         print(f"[_send_review_notification] Error: {e}", file=sys.stderr)
@@ -146,7 +146,7 @@ def _send_task_notification(
             "--button", f"💬 Feedback:{_TASK_FEEDBACK}",
             "--button", f"✗ Reject:{_TASK_REJECTED}",
         ]
-        _sp.run(cmd, timeout=10)
+        _sp.run(cmd, timeout=10, capture_output=True)
         return True
     except Exception as e:
         print(f"[_send_task_notification] Error: {e}", file=sys.stderr)
@@ -523,7 +523,7 @@ def workspace_override(cwd: str, reason: str) -> str:
             "--button", f"✓ Allow Session:{_OVERRIDE_SESSION}",
             "--button", f"✗ Reject:{_OVERRIDE_REJECT}",
         ]
-        _sp.run(cmd, timeout=10)
+        _sp.run(cmd, timeout=10, capture_output=True)
     except Exception as e:
         return f"[workspace_override] Failed to send notification: {e}"
 

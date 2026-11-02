@@ -10,15 +10,15 @@ import subprocess
 import time
 from typing import Optional
 
-_cond = shutil.which("cond")
+_COND_PATH = shutil.which("cond")
 _condD_PIPES = ["/tmp/cond-universal.pipe", "/tmp/cond-wlroots.pipe"]
 
 
 def _cond(*args, fmt="json", timeout=15) -> dict | list | str:
-    if not _cond:
+    if not _COND_PATH:
         return {"error": "cond not found on PATH. Install Conduit CLI."}
     result = subprocess.run(
-        [_cond, "--format", fmt, *[str(a) for a in args]],
+        [_COND_PATH, "--format", fmt, *[str(a) for a in args]],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -378,13 +378,18 @@ def register_tools(mcp):
 
         Args:
             question:  What to ask. e.g. "Did the app launch correctly?"
-            path:      Optional existing image file. If omitted, takes live screenshot.
+            path:      Not supported. cond's --query always captures a live
+                       screenshot; there is no flag to pass an existing image
+                       file into --query. Passing this raises an error rather
+                       than silently building a broken command.
             as_schema: If True, returns structured JSON with every UI element mapped
                        to its type, position, state, and the cond action to interact with it.
         """
-        args = ["--query", question]
         if path:
-            args = ["--ocr-file", path] + args
+            return ("[Error: cond_visual_query does not support an existing image file. "
+                    "cond's --query flag always captures a live screenshot. "
+                    "For text extraction from an existing file, use cond_ocr_file instead.]")
+        args = ["--query", question]
         if as_schema:
             args.append("--schema")
         return _cond(*args, fmt="text", timeout=35)
