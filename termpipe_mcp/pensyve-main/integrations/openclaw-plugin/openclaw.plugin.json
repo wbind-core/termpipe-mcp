@@ -1,0 +1,48 @@
+{
+  "id": "pensyve",
+  "name": "Pensyve Memory",
+  "description": "Offline-first memory with 8-signal fusion retrieval. Replaces default memory-core with Pensyve's semantic, episodic, and procedural memory types.",
+  "contracts": {
+    "tools": [
+      "memory_recall",
+      "memory_store",
+      "memory_get",
+      "memory_forget",
+      "memory_status"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "Pensyve API URL",
+        "default": "http://localhost:3000"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "Pensyve API key (optional for local deployments)"
+      },
+      "entity": {
+        "type": "string",
+        "description": "Entity name for memory storage",
+        "default": "openclaw-agent"
+      },
+      "autoRecall": {
+        "type": "boolean",
+        "description": "Inject memories before each turn",
+        "default": true
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "description": "Store conversation context after each turn",
+        "default": true
+      },
+      "recallLimit": {
+        "type": "number",
+        "description": "Max memories to recall per turn",
+        "default": 5
+      }
+    }
+  }
+}

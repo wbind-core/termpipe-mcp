@@ -1,0 +1,98 @@
+[package]
+name = "pensyve-core"
+version = "4.0.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "Universal memory runtime for AI agents — episodic, semantic, and procedural memory with 8-signal fusion retrieval"
+readme = "../README.md"
+homepage = "https://pensyve.com"
+repository = "https://github.com/major7apps/pensyve"
+documentation = "https://pensyve.com/docs"
+keywords = ["ai", "agents", "memory", "llm", "retrieval"]
+categories = ["science", "database"]
+
+[lib]
+name = "pensyve_core"
+
+[dependencies]
+rusqlite = { version = "0.40", features = ["bundled", "vtab"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+dirs = "6"
+regex = "1"
+# Previously exact-pinned to =5.17.2 after PR #190 attributed a 2/6
+# no-network-invariant-test failure to the 5.17.2 -> 5.17.3 bump. Issue #191
+# re-investigated: fastembed 5.17.2 and 5.17.3 ship byte-identical `.rs`
+# source (verified via `diff -rq` across both crate source trees on
+# crates.io); the only Cargo.toml change is candle-core/candle-nn
+# 0.10.2 -> 0.11.0, gated behind the `qwen3`/`nomic-v2-moe` features this
+# workspace never enables (candle does not appear in this repo's
+# Cargo.lock at all). `cargo update -p fastembed --precise 5.17.3` moves
+# only fastembed's own lockfile entry -- zero transitive dependencies
+# change version. 20+ repeated runs of
+# `cargo test -p pensyve-core --test test_no_network_invariants` against
+# a real seeded cache (default parallel threads, --test-threads=4, and
+# --test-threads=8) were 100% green at 5.17.3, including via the exact
+# Cargo.lock diff PR #173 originally introduced. The original 2/6 failure
+# was never reproduced and was most likely host-specific flakiness (see
+# the latent test race documented in
+# `tests/test_no_network_invariants.rs`) rather than a real fastembed
+# regression -- PR #190's own body already concluded no transitive
+# dependency change could explain it. Pinned to exact 6.0.1 for this reviewed
+# migration because a normal caret requirement now admits unreviewed 6.0.2.
+# Revisit the pin separately; CI runs `test_no_network_invariants` against a
+# seeded cache on every PR (see `.github/workflows/ci.yml`).
+fastembed = "=6.0.1"
+petgraph = "0.8"
+# Phase 2B: compile-time predicate-verb lexicon for the shallow dependency
+# parser (`extraction::dep_parse`). `phf::Map` keys are interned at build
+# time, so verb→relation lookups are zero-allocation and branch-light on
+# the ingest hot path.
+phf = { version = "0.14", features = ["macros"] }
+dashmap = "6"
+rayon = "1.10"
+tracing = "0.1"
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+sqlx-core = { version = "0.9.0", features = ["_rt-tokio", "_tls-rustls-aws-lc-rs", "json", "chrono", "uuid"], optional = true }
+sqlx-postgres = { version = "0.9.0", features = ["json", "chrono", "uuid"], optional = true }
+# Retry backoff is always compiled; its async callers already run inside the gateway's
+# Tokio runtime, so `tokio::time::sleep` cannot panic outside a runtime in production.
+tokio = { version = "1", features = ["time"] }
+# `CancellationToken` for cooperative cancellation of long-running operators.
+# Plumbed through `ConsolidationEngine::run` and the LocalLLM extractors in
+# G1/P3-P4. Landed unconditionally (rather than feature-gated) so the same
+# signature works for `default` builds that only construct cancel tokens to
+# pass through to no-op call sites.
+tokio-util = { workspace = true }
+# `BatchedLocalLLMExtractor` fans out N concurrent vLLM calls via
+# `futures::future::join_all`. Only the default-features set is needed
+# (`futures-util` for `join_all`); we don't pull in executors or I/O.
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"], optional = true }
+
+[features]
+default = []
+postgres = ["dep:sqlx-core", "dep:sqlx-postgres", "tokio/rt-multi-thread"]
+# Local-LLM-backed observation extractor (`LocalLLMExtractor`,
+# `BatchedLocalLLMExtractor`) + the tolerant JSON parser + cached-bulk
+# replay wrapper. Targets an OpenAI-compatible vLLM endpoint.
+observation-extraction = ["dep:reqwest", "dep:futures", "tokio/macros", "tokio/sync"]
+
+[dev-dependencies]
+tempfile = "3"
+criterion = { version = "0.8", features = ["html_reports"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }
+wiremock = "0.6"
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "cognitive_engine"
+harness = false

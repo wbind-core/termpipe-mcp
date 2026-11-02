@@ -165,10 +165,11 @@ def workspace_plan_update(
         }), mime="application/json")
 
         next_step = (
-            f"➡️  Call workspace_await_approval(cwd=\"{cwd}\") to block until response."
+            f"➡️  Call workspace_plan(cwd=\"{cwd}\", action=\"init_review\", "
+            f"plan_content=<plan>) to re-publish and block until the verdict arrives."
             if status == PLAN_PENDING_APPROVAL else
-            f"➡️  Call workspace_request_review(cwd=\"{cwd}\") first, "
-            f"then workspace_await_approval(cwd=\"{cwd}\")."
+            f"➡️  Call workspace_plan(cwd=\"{cwd}\", action=\"init_review\", "
+            f"plan_content=<plan>) to submit for review and block until the verdict arrives."
         )
         return (
             base_msg
@@ -366,7 +367,7 @@ def workspace_init_and_review(
             f"   feedback file: {feedback_path}\n\n"
             f"{diff_text}\n\n"
             f"➡️  REQUIRED NEXT STEP: revise implementation_plan.md addressing the "
-            f"feedback above, then call workspace_init_and_review(cwd=\"{cwd}\", "
+            f"feedback above, then call workspace_plan(cwd=\"{cwd}\", action=\"init_review\", "
             f"plan_content=<revised plan>) again."
         )
 

@@ -1,0 +1,119 @@
+---
+name: session-memory
+description: "End-of-session memory capture -- analyzes session for decisions, outcomes, and patterns worth remembering, then stores confirmed items via Pensyve. Use when ending a work session or when the user wants to capture what was learned."
+version: 1.0.0
+---
+
+# Session Memory Capture
+
+Analyze the current session for memorable decisions, outcomes, and patterns, then store confirmed items in Pensyve memory.
+
+## Instructions
+
+> **Note:** As of the working-memory substrate update, most memorable items are already captured in-flight during the session by memory-woven skills (memory-informed-debug, memory-informed-design, memory-informed-longitudinal-work) and by the signal buffer's in-flight triggers. This skill handles **residuals** — items that weren't captured in-flight and still deserve to be saved. Before presenting candidates, call `pensyve_inspect` to see what's already been captured this session and skip duplicates.
+
+When this skill is invoked (typically at the end of a coding session), follow these steps:
+
+### Step 1: Analyze the Session
+
+Review the current session conversation for three categories of memorable content:
+
+**Decisions** (confidence: 0.9):
+
+- Architecture or design choices ("we decided to use X over Y because...")
+- Technology selections ("chose SQLite for the MVP because...")
+- API design decisions ("the endpoint should accept JSON, not form data")
+- Tradeoff resolutions ("accepted O(n) scan because dataset is small")
+
+**Outcomes** (confidence: 0.8):
+
+- Bug fixes and their root causes ("the auth failure was caused by expired refresh tokens")
+- Successful approaches ("fixed the race condition by adding a mutex")
+- Failed approaches ("tried connection pooling but it caused deadlocks")
+- Performance findings ("query time dropped from 2s to 50ms after adding the index")
+
+**Patterns** (confidence: 0.7):
+
+- Recurring issues ("this is the third time the cache invalidation was wrong")
+- Workflow discoveries ("running tests before migrations catches schema drift")
+- Cross-cutting observations ("all the timeout errors trace back to the DNS resolver")
+
+### Step 2: Filter for Significance
+
+Skip routine, low-signal content that does not warrant long-term storage:
+
+- **Check for duplicates via recall.** For each candidate, call `pensyve_recall` with `query: <candidate fact text>`, `entity: <candidate's entity>`, `limit: 3`. If any returned memory has a score ≥0.85 against the candidate, skip it as a likely duplicate. Note: `pensyve_inspect` cannot filter by `episode_id` (its params are `entity`, `memory_type?`, `limit?` only), so this dedup check uses semantic similarity against the entity's full memory set rather than true session-scoped filtering. Consequence: very similar items captured in prior sessions will also trigger the skip — acceptable for avoiding genuine duplicates, but may miss newly-phrased variants of old memories.
+
+- Simple typo fixes or formatting changes
+- Routine file edits with no architectural significance
+- Standard boilerplate or scaffolding without decisions
+- Repeated application of known patterns (unless the pattern itself is new)
+- Content that is already stored in Pensyve (check via `pensyve_recall` with targeted queries)
+
+### Step 3: Present Candidates for Confirmation
+
+Present the candidate memories to the user in a structured format:
+
+> **Session Memory Candidates**
+>
+> **Decisions** (confidence: 0.9):
+>
+> 1. `auth-service`: Chose RS256 over HS256 for JWT signing to support key rotation
+> 2. `api-design`: POST endpoints return 201 with the created resource, not 200
+>
+> **Outcomes** (confidence: 0.8): 3. `database`: Migration script fails silently when Python < 3.11 -- added version check
+>
+> **Patterns** (confidence: 0.7): 4. `testing`: Integration tests that touch the filesystem need tmpdir cleanup
+>
+> Which items should I store? (e.g., "all", "1,3", "none")
+
+### Step 4: Store Confirmed Items
+
+For each confirmed item, decide the storage type:
+
+**Episodic (observations)** -- things that happened this session. Call `pensyve_observe` with:
+
+- `episode_id`: From the session state (set by SessionStart hook)
+- `content`: The observation text
+- `source_entity`: `"claude-code"`
+- `about_entity`: The inferred entity name (lowercase, hyphenated)
+- `content_type`: `"text"` for decisions/patterns, `"code"` for code-related outcomes
+
+Use for: bug fixes, failed approaches, debugging outcomes, performance findings, session-specific events.
+
+**Semantic (durable facts)** -- truths that persist beyond this session. Call `pensyve_remember` with:
+
+- `entity`: The inferred entity name (lowercase, hyphenated)
+- `fact`: The memory text
+- `confidence`: 0.9 for decisions, 0.8 for outcomes, 0.7 for patterns
+
+Use for: architecture decisions, technology choices, user preferences, project conventions.
+
+When in doubt, prefer `pensyve_observe` -- the consolidation engine promotes recurring patterns to semantic facts automatically.
+
+Before storing, run `pensyve_recall` with a query matching the candidate fact to check for duplicates. If a highly similar memory already exists (score > 0.85), skip it and inform the user.
+
+### Step 5: Report Results
+
+After storing, summarize what was saved:
+
+> **Stored 3 memories:**
+>
+> - `auth-service`: Chose RS256 over HS256 for JWT signing (confidence: 0.9)
+> - `database`: Migration script fails silently when Python < 3.11 (confidence: 0.8)
+> - `testing`: Integration tests need tmpdir cleanup (confidence: 0.7)
+
+## Constraints
+
+- **NEVER auto-store.** Every candidate MUST be presented to the user for confirmation before calling `pensyve_remember`. This is a hard requirement.
+- **Never read or write `.claude/` memory files.** All memory operations go through the Pensyve MCP tools exclusively.
+- Entity names MUST be lowercase and hyphenated.
+- Do not store secrets, API keys, passwords, or credentials. Warn the user if a candidate appears to contain sensitive data.
+- If the session has no significant content worth remembering, say so clearly rather than forcing low-quality memories.
+- When in doubt about whether something is significant, include it as a candidate and let the user decide.
+
+## Error Handling
+
+- If `pensyve_remember` fails, display the error and continue with remaining items.
+- If `pensyve_recall` (duplicate check) fails, proceed with storage but note that duplicate checking was skipped.
+- If the MCP server is not connected, inform the user and suggest checking their MCP server configuration.

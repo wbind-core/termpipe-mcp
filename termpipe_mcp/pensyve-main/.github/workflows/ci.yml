@@ -1,0 +1,174 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Cargo fmt
+        run: cargo fmt --all -- --check
+      - name: Cargo clippy
+        run: cargo clippy --workspace -- -D warnings
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Python lint
+        run: |
+          uv sync --extra dev
+          uv run ruff check pensyve_server/ integrations/ tests/
+          uv run pyright pensyve_server/
+      - uses: oven-sh/setup-bun@v2
+      - name: TypeScript lint
+        working-directory: pensyve-ts
+        run: |
+          bun install
+          bun run lint
+
+  test-rust:
+    name: Rust Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # `pensyve-python` carries in-crate Rust tests that link against
+      # libpython; the toolcache interpreter ships the shared library and
+      # setup-python exports its lib directory on LD_LIBRARY_PATH.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Check bounded shipping runtime callers
+        run: bash scripts/check-bounded-runtime-callers.sh
+      - name: Run tests
+        run: cargo test --workspace
+
+  test-rust-postgres:
+    name: Rust Tests (postgres)
+    runs-on: ubuntu-latest
+    # `pensyve-core`'s `postgres` feature is non-default. "Rust Tests" above
+    # compiles it (pensyve-mcp-gateway turns it on), but nothing has ever run
+    # it against a real server, so every Postgres-only behaviour — RLS
+    # policies, the namespace GUC, the handwritten SQL in
+    # `storage/postgres.rs` — was untested. That gap is what let the #218
+    # scoped-delete bug through: SQLite has no row-level security, so no
+    # existing test could observe it. Tracked by #225.
+    #
+    # Not a required check yet: promotion happens in repo settings once this
+    # job has a few green runs behind it.
+    services:
+      postgres:
+        # pgvector, not plain `postgres:16` — `postgres_schema.sql` opens with
+        # `CREATE EXTENSION IF NOT EXISTS vector` and the stock image has no
+        # such extension available.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Deliberately not `DATABASE_URL`: the live tests create and drop their
+      # own databases and roles, so they demand a test-only variable rather
+      # than the one a real deployment reads. Tests skip themselves with an
+      # explicit message when it is unset.
+      #
+      # This points at the *admin* role. Each test provisions a throwaway
+      # database plus an unprivileged owner role from it and applies
+      # `postgres_schema.sql` there (via `PostgresBackend::from_pool`), so the
+      # schema needs no separate CI step and the `postgres` database stays
+      # empty.
+      PENSYVE_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run pensyve-core tests with the postgres feature
+        run: cargo test -p pensyve-core --features postgres
+
+  test-python:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install and test
+        run: |
+          uv sync --extra dev
+          uv run maturin develop --manifest-path pensyve-python/Cargo.toml
+          uv run pytest tests/python/ -v
+
+  test-typescript:
+    name: TypeScript Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - name: Install and test
+        working-directory: pensyve-ts
+        run: |
+          bun install
+          bun run build
+          bun test
+
+  test-go:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.22"
+          cache-dependency-path: pensyve-go/go.mod
+      - name: Run tests
+        working-directory: pensyve-go
+        run: go test ./... -v
+
+  test-wasm:
+    name: WASM Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Run tests
+        working-directory: pensyve-wasm
+        run: wasm-pack test --node
+
+  test-gateway:
+    name: Gateway Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build gateway
+        run: cargo build -p pensyve-mcp-gateway
+      - name: Run gateway tests
+        run: cargo test -p pensyve-mcp-gateway -p pensyve-mcp-tools
+

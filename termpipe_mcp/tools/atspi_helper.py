@@ -11,6 +11,8 @@ Usage:
 import sys
 import json
 import time
+import shutil
+import subprocess
 
 try:
     import gi
@@ -137,7 +139,21 @@ def resolve_node_by_path(app, path_str):
             return None
     return current
 
-def remote_control(real_path, action, payload=None):
+def _check_stale(node, expected_name, expected_role):
+    """Return a dict with stale=True and found_name/found_role if the node
+    at this path no longer matches what was recorded at query time.
+    Returns None if it matches (or no expectation was supplied)."""
+    if not expected_name and not expected_role:
+        return None
+    found_name = node.get_name() or ""
+    found_role = node.get_role_name() or ""
+    if (expected_name and found_name != expected_name) or \
+       (expected_role and found_role != expected_role):
+        return {"stale": True, "found_name": found_name, "found_role": found_role}
+    return None
+
+
+def remote_control(real_path, action, payload=None, expected_name=None, expected_role=None):
     app = find_focused_app()
     if not app:
         return {"error": "No focused application."}
@@ -145,6 +161,10 @@ def remote_control(real_path, action, payload=None):
     node = resolve_node_by_path(app, real_path)
     if not node:
         return {"error": f"Node {real_path} not found."}
+
+    stale = _check_stale(node, expected_name, expected_role)
+    if stale:
+        return stale
         
     try:
         if action == "click":
@@ -155,17 +175,31 @@ def remote_control(real_path, action, payload=None):
             else:
                 return {"error": "Node does not support click action."}
         elif action == "type":
-            editable_iface = node.get_editable_text()
-            if editable_iface:
-                text_iface = node.get_text()
-                if text_iface:
-                    editable_iface.delete_text(0, text_iface.get_character_count())
-                editable_iface.insert_text(0, str(payload) if payload else "", -1)
-                return {"success": True, "message": f"Typed '{payload}'"}
-            else:
-                comp = node.get_component()
-                if comp: comp.grab_focus()
-                return {"success": True, "message": "Focused for typing (keyboard synthesis unsupported without layout)."}
+            # Always focus the node via AT-SPI first (so text lands in the
+            # right widget), then inject the actual keystrokes via wput's
+            # uinput backend. uinput is kernel-level virtual keyboard input,
+            # so it works regardless of whether the widget implements
+            # AT-SPI's EditableText interface — no more silent focus-only
+            # fallback on widgets that don't support it.
+            comp = node.get_component()
+            if not comp:
+                return {"error": "Node cannot be focused; cannot target it for typing."}
+            comp.grab_focus()
+
+            text = str(payload) if payload else ""
+            wput_path = shutil.which("wput")
+            if not wput_path:
+                return {"error": "wput not found on PATH. Install wput to enable typing."}
+            try:
+                result = subprocess.run(
+                    [wput_path, "--type", "--uinput", text],
+                    capture_output=True, text=True, timeout=15
+                )
+            except Exception as e:
+                return {"error": f"wput invocation failed: {e}"}
+            if result.returncode != 0:
+                return {"error": f"wput --type --uinput failed: {result.stderr.strip() or result.stdout.strip()}"}
+            return {"success": True, "message": f"Typed '{text}' via wput --uinput"}
         elif action == "focus":
             comp = node.get_component()
             if comp:
@@ -179,7 +213,7 @@ def remote_control(real_path, action, payload=None):
     except Exception as e:
         return {"error": str(e)}
 
-def read_state(real_path):
+def read_state(real_path, expected_name=None, expected_role=None):
     app = find_focused_app()
     if not app:
         return {"error": "No focused application."}
@@ -187,6 +221,10 @@ def read_state(real_path):
     node = resolve_node_by_path(app, real_path)
     if not node:
         return {"error": f"Node {real_path} not found."}
+
+    stale = _check_stale(node, expected_name, expected_role)
+    if stale:
+        return stale
         
     state_set = node.get_state_set()
     states = state_set.get_states()
@@ -220,11 +258,15 @@ if __name__ == "__main__":
         path = sys.argv[2] if len(sys.argv) > 2 else ""
         action = sys.argv[3] if len(sys.argv) > 3 else ""
         payload = sys.argv[4] if len(sys.argv) > 4 else ""
-        print(json.dumps(remote_control(path, action, payload)))
+        expected_name = sys.argv[5] if len(sys.argv) > 5 else None
+        expected_role = sys.argv[6] if len(sys.argv) > 6 else None
+        print(json.dumps(remote_control(path, action, payload, expected_name, expected_role)))
         
     elif cmd == "read_state":
         path = sys.argv[2] if len(sys.argv) > 2 else ""
-        print(json.dumps(read_state(path)))
+        expected_name = sys.argv[3] if len(sys.argv) > 3 else None
+        expected_role = sys.argv[4] if len(sys.argv) > 4 else None
+        print(json.dumps(read_state(path, expected_name, expected_role)))
         
     else:
         print(json.dumps({"error": f"Unknown command {cmd}"}))
